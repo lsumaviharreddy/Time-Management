@@ -55,3 +55,39 @@ If an app shows "Not installed", its package name differs on your phone. Edit `M
 - Repeating tasks sync as repeating events. Skipping a day in the app excludes that date in the calendar, and deleting or changing a single day in Google Calendar hides it in the app. Done ticks on single days of a repeating task stay in the app.
 - A finished task shows a check mark at the start of its event title. Add or remove the check mark in Google Calendar to mark a task done or not done.
 - Turning sync off leaves the tasks in the app and the events in the calendar.
+
+## Use it on your laptop (web version)
+
+The `docs/` folder is a web app with the same day, week and month views, repeating tasks and background colours. It reads and writes your Google Calendar, so the phone app and the laptop always show the same tasks. Screen time and app timers stay phone-only.
+
+### 1. Turn on GitHub Pages (once)
+
+1. Push this repo to GitHub.
+2. Repo **Settings → Pages**. Under *Build and deployment*, set **Source: Deploy from a branch**, **Branch: main**, **Folder: /docs**, then Save.
+3. After a minute the site is live at `https://<your-username>.github.io/<repo-name>/` (for example `https://lsumaviharreddy.github.io/Time-Management/`).
+
+### 2. Create a Google sign-in key (once, free)
+
+1. Go to <https://console.cloud.google.com/> and create a project (any name, for example *TimeBlock*).
+2. **APIs & Services → Library**, search for **Google Calendar API**, click **Enable**.
+3. **APIs & Services → OAuth consent screen** (may be called *Google Auth Platform*): choose **External**, fill in the app name (TimeBlock) and your email, and save. Under **Audience / Test users**, add your own Google address. Leave the app in *Testing* mode; that is fine for personal use.
+4. **Credentials → Create credentials → OAuth client ID**:
+   - Application type: **Web application**
+   - **Authorized JavaScript origins**: add `https://lsumaviharreddy.github.io` (just the domain, no path and no trailing slash). Add `http://localhost:8000` too if you want to test locally.
+   - Create, then copy the **Client ID** (it ends in `.apps.googleusercontent.com`).
+5. Open your site, paste the Client ID on the first screen (or put it in `docs/config.js`), and press **Sign in with Google**. Google will warn that the app is unverified; choose **Continue**. That is expected for your own test app.
+
+In *Testing* mode Google signs you out about every 7 days; just press Sign in again.
+
+### 3. Use the same calendar on both devices
+
+Pick the calendar named **TimeBlock** (create it in Google Calendar first, as for the phone app). The web app selects it automatically if it exists; change it under **⋮ → Google Calendar**. In the Android app choose the same calendar in the sync dialog.
+
+### Notes
+
+- Repeating tasks are written as normal repeating Google Calendar events. Skipping one day deletes just that occurrence. Custom patterns made in Google Calendar (every 2 weeks, "first Monday") show up but their pattern can only be changed in Google Calendar.
+- "Completed" adds a ✓ to the title, the same as the Android app.
+- Tap or click an empty spot on the timeline to add a task at that time.
+- ⋮ → Reminders in this tab gives a notification 5 minutes before a task while the page is open. For reminders when the page is closed, rely on the phone app or Google Calendar's own notifications.
+- Install as an app: in Chrome or Edge, use the install icon in the address bar.
+- To try it locally: `cd docs && python -m http.server 8000`, then open <http://localhost:8000>. **Demo mode** works without any Google setup.
