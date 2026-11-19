@@ -8,3 +8,7 @@ build/
 .cxx/
 *.apk
 .DS_Store
+
+# stray copies of the project / downloads
+/TimeBlock/
+/Claude outputs/

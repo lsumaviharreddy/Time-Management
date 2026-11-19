@@ -75,7 +75,7 @@ class MainActivity : ComponentActivity() {
         }
 
         setContent {
-            TimeBlockTheme {
+            TimeBlockTheme(state.themeIndex) {
                 AppRoot(state)
             }
         }

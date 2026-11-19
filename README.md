@@ -6,6 +6,9 @@ An Android app (Kotlin + Jetpack Compose) for arranging your day.
 - **Reminder**: a notification 5 minutes before every task starts (change `LEAD_MIN` in `Reminders.kt`).
 - **Focus**: Pomodoro timer (focus/break), optionally tied to a task. A notification fires when it ends, even if the app is closed.
 - **Apps**: today's screen time for Instagram, YouTube, Kotatsu, Genshin Impact and Brawl Stars, with a 7-day chart and a daily timer for each. A timer gives a heads-up 5 min before it ends, then covers the app with a "Time's up" screen.
+- **Repeating tasks**: choose Daily, Weekly (pick days, or Weekdays), or Monthly when adding a task, with an optional end date. Manage them from the menu (three dots) > Repeating tasks. Open one to change it for every day, skip a single day, or delete the series. Each occurrence has its own done tick and its own 5-minute reminder. Repeating tasks stay in the app and are not copied to Google Calendar.
+- **Day, Week and Month views**: switch with the chips under the date. Tap a day in the week header or the month grid to open it.
+- **Background colour**: menu (three dots) > Background colour: sky blue, orange, red, gray, black or white.
 - **Google Calendar sync**: tap the sync icon on the Plan screen, allow calendar access and pick a calendar. Tasks become events there, and events you add or move in Google Calendar on your laptop show up in the app (with their 5-minute reminders). Recurring and all-day events are skipped.
 - **Review**: weekly stats: tasks completed, focus time, planned vs focused chart.
 

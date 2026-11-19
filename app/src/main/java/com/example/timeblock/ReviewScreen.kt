@@ -64,7 +64,7 @@ fun ReviewScreen(state: PlannerState) {
         .plusWeeks(weekOffset.toLong())
     val days = (0..6).map { i ->
         val d = monday.plusDays(i.toLong())
-        val ts = state.tasks.filter { it.date == d }
+        val ts = state.tasksOn(d)
         DayStat(
             date = d,
             plannedMin = ts.sumOf { it.durationMin },

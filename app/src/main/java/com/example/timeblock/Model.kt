@@ -15,6 +15,7 @@ data class Task(
     val done: Boolean = false,
     val colorIndex: Int = 0,
     val eventId: Long = -1L, // Google Calendar event id, -1 if not synced
+    val seriesId: Int = -1,  // >= 0 when this is one occurrence of a repeating task
 ) {
     val endMin: Int get() = startMin + durationMin
 
@@ -66,4 +67,9 @@ fun findFreeSlot(
         start = (clash.endMin + 14) / 15 * 15
     }
     return null
+}
+
+fun fmtHourShort(h: Int): String {
+    val hh = if (h % 12 == 0) 12 else h % 12
+    return "$hh${if (h < 12) "a" else "p"}"
 }

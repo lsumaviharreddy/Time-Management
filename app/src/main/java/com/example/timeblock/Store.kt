@@ -66,6 +66,55 @@ class Store(context: Context) {
         prefs.edit().putString("sessions", arr.toString()).apply()
     }
 
+    fun loadSeries(): List<Series> {
+        val arr = JSONArray(prefs.getString("series", "[]"))
+        return (0 until arr.length()).map { i ->
+            val o = arr.getJSONObject(i)
+            fun dates(name: String): Set<LocalDate> {
+                val a = o.optJSONArray(name) ?: return emptySet()
+                return (0 until a.length()).map { LocalDate.parse(a.getString(it)) }.toSet()
+            }
+            Series(
+                id = o.getInt("id"),
+                title = o.getString("title"),
+                startDate = LocalDate.parse(o.getString("start")),
+                startMin = o.getInt("startMin"),
+                durationMin = o.getInt("dur"),
+                colorIndex = o.optInt("color", 0),
+                rule = o.optInt("rule", REPEAT_DAILY),
+                weekdayMask = o.optInt("mask", 0),
+                endDate = if (o.has("end")) LocalDate.parse(o.getString("end")) else null,
+                doneDates = dates("done"),
+                skippedDates = dates("skip"),
+            )
+        }
+    }
+
+    fun saveSeries(list: List<Series>) {
+        val arr = JSONArray()
+        list.forEach { s ->
+            val o = JSONObject()
+                .put("id", s.id)
+                .put("title", s.title)
+                .put("start", s.startDate.toString())
+                .put("startMin", s.startMin)
+                .put("dur", s.durationMin)
+                .put("color", s.colorIndex)
+                .put("rule", s.rule)
+                .put("mask", s.weekdayMask)
+                .put("done", JSONArray(s.doneDates.map { it.toString() }))
+                .put("skip", JSONArray(s.skippedDates.map { it.toString() }))
+            if (s.endDate != null) o.put("end", s.endDate.toString())
+            arr.put(o)
+        }
+        prefs.edit().putString("series", arr.toString()).apply()
+    }
+
+    // Background colour choice (index into BgThemes)
+    var theme: Int
+        get() = prefs.getInt("theme", 5)
+        set(v) { prefs.edit().putInt("theme", v).apply() }
+
     fun nextId(): Int {
         val n = prefs.getInt("nextId", 1)
         prefs.edit().putInt("nextId", n + 1).apply()

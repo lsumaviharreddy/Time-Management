@@ -22,7 +22,19 @@ class PlannerState(private val ctx: Context) {
     val tasks = mutableStateListOf<Task>().apply { addAll(store.loadTasks()) }
     val sessions = mutableStateListOf<FocusSession>().apply { addAll(store.loadSessions()) }
 
+    val series = mutableStateListOf<Series>().apply { addAll(store.loadSeries()) }
+
     var selectedDate by mutableStateOf(LocalDate.now())
+
+    /** 0 = day, 1 = week, 2 = month */
+    var viewMode by mutableIntStateOf(0)
+    var themeIndex by mutableIntStateOf(store.theme)
+        private set
+
+    fun setTheme(i: Int) {
+        themeIndex = i
+        store.theme = i
+    }
 
     var now by mutableLongStateOf(System.currentTimeMillis())
         private set
@@ -76,8 +88,47 @@ class PlannerState(private val ctx: Context) {
     val running: Boolean get() = focusEnd > 0L
 
     // ---- tasks ----
+    /** Normal tasks plus occurrences of repeating tasks on [date], in time order. */
     fun tasksOn(date: LocalDate): List<Task> =
-        tasks.filter { it.date == date }.sortedBy { it.startMin }
+        (tasks.filter { it.date == date } + series.filter { it.occursOn(date) }.map { it.occurrence(date) })
+            .sortedBy { it.startMin }
+
+    fun tasksBetween(from: LocalDate, to: LocalDate): List<Task> {
+        val out = mutableListOf<Task>()
+        var d = from
+        while (!d.isAfter(to)) {
+            out.addAll(tasksOn(d))
+            d = d.plusDays(1)
+        }
+        return out
+    }
+
+    // ---- repeating tasks ----
+    private fun saveSeries() = store.saveSeries(series.toList())
+
+    fun upsertSeries(s: Series) {
+        val i = series.indexOfFirst { it.id == s.id }
+        if (i >= 0) {
+            Reminders.cancelSeries(ctx, series[i])
+            series[i] = s
+        } else {
+            series.add(s)
+        }
+        saveSeries()
+        Reminders.scheduleSeries(ctx, s)
+    }
+
+    fun deleteSeries(id: Int) {
+        val s = series.firstOrNull { it.id == id } ?: return
+        Reminders.cancelSeries(ctx, s)
+        series.removeAll { it.id == id }
+        saveSeries()
+    }
+
+    fun skipOccurrence(id: Int, date: LocalDate) {
+        val s = series.firstOrNull { it.id == id } ?: return
+        upsertSeries(s.copy(skippedDates = s.skippedDates + date))
+    }
 
     fun newId(): Int = store.nextId()
 
@@ -120,9 +171,19 @@ class PlannerState(private val ctx: Context) {
         Reminders.cancel(ctx, id)
     }
 
-    fun toggleDone(t: Task) = upsert(t.copy(done = !t.done))
+    fun toggleDone(t: Task) {
+        if (t.seriesId >= 0) {
+            val s = series.firstOrNull { it.id == t.seriesId } ?: return
+            val done = if (t.date in s.doneDates) s.doneDates - t.date else s.doneDates + t.date
+            upsertSeries(s.copy(doneDates = done))
+        } else {
+            upsert(t.copy(done = !t.done))
+        }
+    }
 
-    fun titleOf(id: Int): String? = tasks.firstOrNull { it.id == id }?.title
+    fun titleOf(id: Int): String? =
+        tasks.firstOrNull { it.id == id }?.title
+            ?: tasksOn(LocalDate.now()).firstOrNull { it.id == id }?.title
 
     // ---- calendar sync ----
     suspend fun syncNow() {

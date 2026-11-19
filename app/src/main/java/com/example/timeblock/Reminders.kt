@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import java.time.LocalDate
 
 /**
  * Schedules a notification [LEAD_MIN] minutes before each task starts,
@@ -94,6 +95,22 @@ object Reminders {
 
     fun cancel(ctx: Context, taskId: Int) = cancelRequest(ctx, taskId)
 
+    /** Reminders for repeating tasks are armed for the next [SERIES_DAYS] days and re-armed whenever one fires. */
+    private const val SERIES_DAYS = 14
+
+    fun scheduleSeries(ctx: Context, s: Series) {
+        val today = LocalDate.now()
+        for (i in 0..SERIES_DAYS) {
+            val d = today.plusDays(i.toLong())
+            if (s.occursOn(d)) schedule(ctx, s.occurrence(d)) else cancelRequest(ctx, occurrenceId(s.id, d))
+        }
+    }
+
+    fun cancelSeries(ctx: Context, s: Series) {
+        val today = LocalDate.now()
+        for (i in 0..SERIES_DAYS) cancelRequest(ctx, occurrenceId(s.id, today.plusDays(i.toLong())))
+    }
+
     fun scheduleFocusEnd(ctx: Context, endMillis: Long, isBreak: Boolean) {
         val pi = pending(ctx, FOCUS_REQ) {
             putExtra("kind", "focus")
@@ -108,6 +125,7 @@ object Reminders {
     fun rescheduleAll(ctx: Context) {
         val store = Store(ctx)
         store.loadTasks().forEach { schedule(ctx, it) }
+        store.loadSeries().forEach { scheduleSeries(ctx, it) }
         if (store.focusEnd > System.currentTimeMillis()) {
             scheduleFocusEnd(ctx, store.focusEnd, store.focusBreak)
         }

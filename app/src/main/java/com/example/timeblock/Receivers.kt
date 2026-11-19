@@ -35,6 +35,7 @@ class ReminderReceiver : BroadcastReceiver() {
 
         val id = if (isFocus) 1 else intent.getIntExtra("id", 0) + 10
         context.getSystemService(NotificationManager::class.java).notify(id, notification)
+        if (!isFocus) Reminders.rescheduleAll(context) // keeps repeating-task reminders armed
     }
 }
 
