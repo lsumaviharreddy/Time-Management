@@ -100,8 +100,9 @@ fun SyncDialog(state: PlannerState, onDismiss: () -> Unit) {
                     Text(
                         "Tip: in Google Calendar on your laptop, create a calendar called TimeBlock " +
                             "(Other calendars > + > Create new calendar) and pick it here, so your other events " +
-                            "don't mix in. Recurring and all-day events are skipped. A finished task shows a " +
-                            "check mark in its event title.",
+                            "don't mix in. Repeating tasks sync as repeating events (daily, weekly, monthly). " +
+                            "Other patterns, such as every 2 weeks, and all-day events are skipped. A finished " +
+                            "task shows a check mark in its event title.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

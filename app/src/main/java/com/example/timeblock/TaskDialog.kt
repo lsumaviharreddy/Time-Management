@@ -48,7 +48,13 @@ import java.time.format.TextStyle
 import java.util.Locale
 
 @Composable
-fun TaskDialog(state: PlannerState, initial: Task?, onDismiss: () -> Unit) {
+fun TaskDialog(
+    state: PlannerState,
+    initial: Task?,
+    presetDate: LocalDate? = null,
+    presetStart: Int? = null,
+    onDismiss: () -> Unit,
+) {
     val ctx = LocalContext.current
     val today = LocalDate.now()
     fun nowMin(): Int = LocalTime.now().let { it.hour * 60 + it.minute }
@@ -59,11 +65,12 @@ fun TaskDialog(state: PlannerState, initial: Task?, onDismiss: () -> Unit) {
     val isSeries = series != null
 
     var title by remember { mutableStateOf(initial?.title ?: "") }
-    var date by remember { mutableStateOf(initial?.date ?: state.selectedDate) }
+    var date by remember { mutableStateOf(initial?.date ?: presetDate ?: state.selectedDate) }
     var duration by remember { mutableStateOf(initial?.durationMin ?: 30) }
     var start by remember {
         mutableStateOf(
             initial?.startMin
+                ?: presetStart
                 ?: (findFreeSlot(state.tasksOn(date), 30, if (date == today) nowMin() else 0) ?: 9 * 60)
         )
     }
@@ -72,7 +79,7 @@ fun TaskDialog(state: PlannerState, initial: Task?, onDismiss: () -> Unit) {
     var repeat by remember { mutableStateOf(series?.rule ?: REPEAT_NONE) }
     var mask by remember {
         mutableStateOf(
-            series?.weekdayMask?.takeIf { it != 0 } ?: weekdayBit((initial?.date ?: state.selectedDate).dayOfWeek)
+            series?.weekdayMask?.takeIf { it != 0 } ?: weekdayBit((initial?.date ?: presetDate ?: state.selectedDate).dayOfWeek)
         )
     }
     var until by remember { mutableStateOf(series?.endDate) }

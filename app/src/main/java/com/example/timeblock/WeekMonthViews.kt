@@ -4,6 +4,7 @@ package com.example.timeblock
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -34,6 +35,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -49,7 +51,12 @@ import java.util.Locale
 
 /** Seven day columns on a shared time axis. Tap a day header to open that day. */
 @Composable
-fun WeekView(state: PlannerState, onTaskClick: (Task) -> Unit, modifier: Modifier = Modifier) {
+fun WeekView(
+    state: PlannerState,
+    onTaskClick: (Task) -> Unit,
+    onAddAt: (LocalDate, Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val today = LocalDate.now()
     val monday = mondayOf(state.selectedDate)
     val days = (0..6).map { monday.plusDays(it.toLong()) }
@@ -107,7 +114,24 @@ fun WeekView(state: PlannerState, onTaskClick: (Task) -> Unit, modifier: Modifie
             val scroll = rememberScrollState(with(density) { (hourH * firstHour).roundToPx() })
 
             Box(Modifier.weight(1f).fillMaxWidth().verticalScroll(scroll)) {
-                Box(Modifier.fillMaxWidth().height(hourH * 24)) {
+                val hourPx = with(density) { hourH.toPx() }
+                val labelPx = with(density) { labelW.toPx() }
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(hourH * 24)
+                        .pointerInput(monday) {
+                            // tap an empty spot in a day column to add a task there
+                            detectTapGestures { offset ->
+                                val x = offset.x - labelPx
+                                if (x >= 0f) {
+                                    val col = (x / ((size.width - labelPx) / 7f)).toInt().coerceIn(0, 6)
+                                    val minutes = (offset.y / hourPx * 60f).toInt() / 15 * 15
+                                    onAddAt(days[col], minutes.coerceIn(0, 23 * 60 + 45))
+                                }
+                            }
+                        }
+                ) {
                     for (h in 0..23) {
                         Box(
                             Modifier
@@ -171,7 +195,12 @@ fun WeekView(state: PlannerState, onTaskClick: (Task) -> Unit, modifier: Modifie
 
 /** Month grid with a dot per task; tap a day to see its tasks underneath. */
 @Composable
-fun MonthView(state: PlannerState, onTaskClick: (Task) -> Unit, modifier: Modifier = Modifier) {
+fun MonthView(
+    state: PlannerState,
+    onTaskClick: (Task) -> Unit,
+    onAddOn: (LocalDate) -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val selected = state.selectedDate
     val first = selected.withDayOfMonth(1)
     val offset = first.dayOfWeek.value - 1
@@ -221,6 +250,7 @@ fun MonthView(state: PlannerState, onTaskClick: (Task) -> Unit, modifier: Modifi
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.SemiBold,
             )
+            TextButton(onClick = { onAddOn(selected) }) { Text("Add task") }
             TextButton(onClick = { state.viewMode = 0 }) { Text("Open day") }
         }
         if (dayTasks.isEmpty()) {

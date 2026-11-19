@@ -104,25 +104,53 @@ class PlannerState(private val ctx: Context) {
     }
 
     // ---- repeating tasks ----
-    private fun saveSeries() = store.saveSeries(series.toList())
+    private fun reloadSeries(list: List<Series>) {
+        if (series.toList() != list) {
+            series.clear()
+            series.addAll(list)
+        }
+    }
+
+    /** Applies a change to the stored series under the same lock the calendar sync uses. */
+    private fun mutateSeries(block: (MutableList<Series>) -> Unit) {
+        synchronized(CalendarSync.LOCK) {
+            val list = store.loadSeries().toMutableList()
+            block(list)
+            store.saveSeries(list)
+            reloadSeries(list)
+        }
+    }
+
+    /** The parts of a series the calendar knows about (colour and done ticks stay in the app). */
+    private fun Series.calendarKey() =
+        listOf(title, startDate, startMin, durationMin, rule, weekdayMask, endDate, skippedDates)
 
     fun upsertSeries(s: Series) {
-        val i = series.indexOfFirst { it.id == s.id }
-        if (i >= 0) {
-            Reminders.cancelSeries(ctx, series[i])
-            series[i] = s
-        } else {
-            series.add(s)
+        var saved = s
+        var old: Series? = null
+        mutateSeries { list ->
+            val i = list.indexOfFirst { it.id == s.id }
+            old = if (i >= 0) list[i] else null
+            var x = if (s.eventId <= 0 && i >= 0) s.copy(eventId = list[i].eventId) else s
+            if (syncOn && (x.eventId <= 0 || i < 0 || list[i].calendarKey() != x.calendarKey())) {
+                x = CalendarSync.pushSeries(ctx, store.calendarId, x)
+            }
+            saved = x
+            if (i >= 0) list[i] = x else list.add(x)
         }
-        saveSeries()
-        Reminders.scheduleSeries(ctx, s)
+        old?.let { Reminders.cancelSeries(ctx, it) }
+        Reminders.scheduleSeries(ctx, saved)
     }
 
     fun deleteSeries(id: Int) {
-        val s = series.firstOrNull { it.id == id } ?: return
-        Reminders.cancelSeries(ctx, s)
-        series.removeAll { it.id == id }
-        saveSeries()
+        var removed: Series? = null
+        mutateSeries { list ->
+            val s = list.firstOrNull { it.id == id }
+            if (s != null && s.eventId > 0 && syncOn) CalendarSync.deleteEvent(ctx, s.eventId)
+            removed = s
+            list.removeAll { it.id == id }
+        }
+        removed?.let { Reminders.cancelSeries(ctx, it) }
     }
 
     fun skipOccurrence(id: Int, date: LocalDate) {
@@ -196,7 +224,10 @@ class PlannerState(private val ctx: Context) {
             }
         }
         if (changed) {
-            synchronized(CalendarSync.LOCK) { reloadFrom(store.loadTasks()) }
+            synchronized(CalendarSync.LOCK) {
+                reloadFrom(store.loadTasks())
+                reloadSeries(store.loadSeries())
+            }
         }
         lastSync = System.currentTimeMillis()
     }
@@ -208,6 +239,9 @@ class PlannerState(private val ctx: Context) {
                 val detached = store.loadTasks().map { it.copy(eventId = -1L) }
                 store.saveTasks(detached)
                 reloadFrom(detached)
+                val detachedSeries = store.loadSeries().map { it.copy(eventId = -1L) }
+                store.saveSeries(detachedSeries)
+                reloadSeries(detachedSeries)
             }
             store.calendarId = id
         }

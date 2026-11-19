@@ -32,11 +32,17 @@ data class Series(
     val endDate: LocalDate? = null,
     val doneDates: Set<LocalDate> = emptySet(),
     val skippedDates: Set<LocalDate> = emptySet(),
+    val eventId: Long = -1L, // recurring Google Calendar event id, -1 if not synced
 ) {
     fun occursOn(d: LocalDate): Boolean {
         if (d < startDate) return false
         if (endDate != null && d > endDate) return false
         if (d in skippedDates) return false
+        return matchesRule(d)
+    }
+
+    /** The repeat rule alone, ignoring start/end dates and skipped days. */
+    fun matchesRule(d: LocalDate): Boolean {
         return when (rule) {
             REPEAT_DAILY -> true
             REPEAT_WEEKLY -> weekdayMask and weekdayBit(d.dayOfWeek) != 0
@@ -44,6 +50,10 @@ data class Series(
             else -> false
         }
     }
+
+    /** First date on or after [startDate] that the rule produces (the calendar event must start on one). */
+    fun firstOccurrence(): LocalDate =
+        generateSequence(startDate) { it.plusDays(1) }.take(400).firstOrNull { matchesRule(it) } ?: startDate
 
     fun occurrence(d: LocalDate): Task = Task(
         id = occurrenceId(id, d),

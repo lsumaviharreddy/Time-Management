@@ -86,6 +86,7 @@ class Store(context: Context) {
                 endDate = if (o.has("end")) LocalDate.parse(o.getString("end")) else null,
                 doneDates = dates("done"),
                 skippedDates = dates("skip"),
+                eventId = o.optLong("ev", -1L),
             )
         }
     }
@@ -104,6 +105,7 @@ class Store(context: Context) {
                 .put("mask", s.weekdayMask)
                 .put("done", JSONArray(s.doneDates.map { it.toString() }))
                 .put("skip", JSONArray(s.skippedDates.map { it.toString() }))
+                .put("ev", s.eventId)
             if (s.endDate != null) o.put("end", s.endDate.toString())
             arr.put(o)
         }

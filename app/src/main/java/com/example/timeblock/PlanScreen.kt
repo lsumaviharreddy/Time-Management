@@ -4,6 +4,7 @@ package com.example.timeblock
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -51,6 +52,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
@@ -71,6 +73,7 @@ fun mondayOf(d: LocalDate): LocalDate = d.with(TemporalAdjusters.previousOrSame(
 fun PlanScreen(state: PlannerState) {
     var editing by remember { mutableStateOf<Task?>(null) }
     var creating by remember { mutableStateOf(false) }
+    var addAt by remember { mutableStateOf<Pair<LocalDate, Int?>?>(null) }
     var showSync by remember { mutableStateOf(false) }
     var showRepeats by remember { mutableStateOf(false) }
     var showTheme by remember { mutableStateOf(false) }
@@ -92,11 +95,22 @@ fun PlanScreen(state: PlannerState) {
                         state = state,
                         tasks = state.tasksOn(state.selectedDate),
                         onTaskClick = { editing = it },
+                        onAddAt = { minutes -> addAt = state.selectedDate to minutes },
                         modifier = Modifier.weight(1f),
                     )
                 }
-                1 -> WeekView(state, onTaskClick = { editing = it }, modifier = Modifier.weight(1f))
-                else -> MonthView(state, onTaskClick = { editing = it }, modifier = Modifier.weight(1f))
+                1 -> WeekView(
+                    state,
+                    onTaskClick = { editing = it },
+                    onAddAt = { d, minutes -> addAt = d to minutes },
+                    modifier = Modifier.weight(1f),
+                )
+                else -> MonthView(
+                    state,
+                    onTaskClick = { editing = it },
+                    onAddOn = { d -> addAt = d to null },
+                    modifier = Modifier.weight(1f),
+                )
             }
         }
         FloatingActionButton(
@@ -122,6 +136,9 @@ fun PlanScreen(state: PlannerState) {
         )
     }
     if (creating) TaskDialog(state, null) { creating = false }
+    addAt?.let { (d, minutes) ->
+        key(d, minutes) { TaskDialog(state, null, presetDate = d, presetStart = minutes) { addAt = null } }
+    }
     editing?.let { t -> key(t.id) { TaskDialog(state, t) { editing = null } } }
 }
 
@@ -407,6 +424,7 @@ private fun Timeline(
     state: PlannerState,
     tasks: List<Task>,
     onTaskClick: (Task) -> Unit,
+    onAddAt: (Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val hourH: Dp = 64.dp
@@ -424,7 +442,19 @@ private fun Timeline(
         val scroll = rememberScrollState(with(density) { (hourH * firstHour).roundToPx() })
 
         Box(modifier.fillMaxWidth().verticalScroll(scroll)) {
-            Box(Modifier.fillMaxWidth().height(hourH * 24)) {
+            val hourPx = with(density) { hourH.toPx() }
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(hourH * 24)
+                    .pointerInput(date) {
+                        // tap an empty spot to add a task at that time (snapped down to 15 minutes)
+                        detectTapGestures { offset ->
+                            val minutes = (offset.y / hourPx * 60f).toInt() / 15 * 15
+                            onAddAt(minutes.coerceIn(0, 23 * 60 + 45))
+                        }
+                    }
+            ) {
                 for (h in 0..23) {
                     Box(
                         Modifier
