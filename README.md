@@ -6,6 +6,7 @@ An Android app (Kotlin + Jetpack Compose) for arranging your day.
 - **Reminder**: a notification 5 minutes before every task starts (change `LEAD_MIN` in `Reminders.kt`).
 - **Focus**: Pomodoro timer (focus/break), optionally tied to a task. A notification fires when it ends, even if the app is closed.
 - **Apps**: today's screen time for Instagram, YouTube, Kotatsu, Genshin Impact and Brawl Stars, with a 7-day chart and a daily timer for each. A timer gives a heads-up 5 min before it ends, then covers the app with a "Time's up" screen.
+- **Google Calendar sync**: tap the sync icon on the Plan screen, allow calendar access and pick a calendar. Tasks become events there, and events you add or move in Google Calendar on your laptop show up in the app (with their 5-minute reminders). Recurring and all-day events are skipped.
 - **Review**: weekly stats: tasks completed, focus time, planned vs focused chart.
 
 ## Install on your phone from GitHub
@@ -43,3 +44,10 @@ Grant these once:
 - **Display over other apps**: needed to show the block screen when a timer runs out.
 
 If an app shows "Not installed", its package name differs on your phone. Edit `MonitoredApps` in `Usage.kt` and the `<queries>` list in `AndroidManifest.xml`.
+
+## Google Calendar sync
+
+- Create a calendar called **TimeBlock** in Google Calendar on your laptop (Other calendars > + > Create new calendar), then pick it in the app so your other events don't mix in.
+- Add your Google account in phone Settings and keep Calendar sync on, or changes won't travel between phone and laptop.
+- A finished task shows a check mark at the start of its event title. Add or remove the check mark in Google Calendar to mark a task done or not done.
+- Turning sync off leaves the tasks in the app and the events in the calendar.

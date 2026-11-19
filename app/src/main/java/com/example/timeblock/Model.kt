@@ -14,6 +14,7 @@ data class Task(
     val durationMin: Int,
     val done: Boolean = false,
     val colorIndex: Int = 0,
+    val eventId: Long = -1L, // Google Calendar event id, -1 if not synced
 ) {
     val endMin: Int get() = startMin + durationMin
 

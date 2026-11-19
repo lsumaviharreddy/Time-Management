@@ -6,6 +6,10 @@
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
+    <!-- Google Calendar sync -->
+    <uses-permission android:name="android.permission.READ_CALENDAR" />
+    <uses-permission android:name="android.permission.WRITE_CALENDAR" />
+
     <!-- App screen time and timers -->
     <uses-permission
         android:name="android.permission.PACKAGE_USAGE_STATS"
@@ -16,6 +20,7 @@
 
     <!-- Lets the app see whether these apps are installed -->
     <queries>
+        <provider android:authorities="com.android.calendar" />
         <package android:name="com.instagram.android" />
         <package android:name="com.instagram.lite" />
         <package android:name="com.google.android.youtube" />
@@ -53,6 +58,11 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Watches which app is on screen to enforce user-set daily app timers" />
         </service>
+
+        <service
+            android:name=".CalendarJobService"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
 
         <receiver
             android:name=".ReminderReceiver"

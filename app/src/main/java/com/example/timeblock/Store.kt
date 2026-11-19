@@ -22,6 +22,7 @@ class Store(context: Context) {
                 durationMin = o.getInt("dur"),
                 done = o.optBoolean("done", false),
                 colorIndex = o.optInt("color", 0),
+                eventId = o.optLong("ev", -1L),
             )
         }
     }
@@ -38,6 +39,7 @@ class Store(context: Context) {
                     .put("dur", t.durationMin)
                     .put("done", t.done)
                     .put("color", t.colorIndex)
+                    .put("ev", t.eventId)
             )
         }
         prefs.edit().putString("tasks", arr.toString()).apply()
@@ -69,6 +71,11 @@ class Store(context: Context) {
         prefs.edit().putInt("nextId", n + 1).apply()
         return n
     }
+
+    // Google Calendar sync: id of the calendar to mirror tasks into (-1 = off)
+    var calendarId: Long
+        get() = prefs.getLong("calendarId", -1L)
+        set(v) { prefs.edit().putLong("calendarId", v).apply() }
 
     // App timers: app key -> daily limit in minutes
     fun loadLimits(): Map<String, Int> {

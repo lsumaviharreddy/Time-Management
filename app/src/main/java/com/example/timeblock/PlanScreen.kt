@@ -28,6 +28,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -63,13 +64,14 @@ import java.time.LocalTime
 fun PlanScreen(state: PlannerState) {
     var editing by remember { mutableStateOf<Task?>(null) }
     var creating by remember { mutableStateOf(false) }
+    var showSync by remember { mutableStateOf(false) }
     val date = state.selectedDate
     val dayTasks = state.tasksOn(date)
 
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
             if (state.needsNotif || state.needsExact) PermissionBanner(state)
-            DateHeader(state, dayTasks)
+            DateHeader(state, dayTasks, onSync = { showSync = true })
             NextUpCard(state)
             Timeline(
                 state = state,
@@ -88,6 +90,7 @@ fun PlanScreen(state: PlannerState) {
         }
     }
 
+    if (showSync) SyncDialog(state) { showSync = false }
     if (creating) TaskDialog(state, null) { creating = false }
     editing?.let { t -> key(t.id) { TaskDialog(state, t) { editing = null } } }
 }
@@ -120,7 +123,7 @@ private fun PermissionBanner(state: PlannerState) {
 }
 
 @Composable
-private fun DateHeader(state: PlannerState, dayTasks: List<Task>) {
+private fun DateHeader(state: PlannerState, dayTasks: List<Task>, onSync: () -> Unit) {
     val date = state.selectedDate
     val today = LocalDate.now()
     val planned = dayTasks.sumOf { it.durationMin }
@@ -154,6 +157,13 @@ private fun DateHeader(state: PlannerState, dayTasks: List<Task>) {
         }
         IconButton(onClick = { state.selectedDate = date.plusDays(1) }) {
             Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "Next day")
+        }
+        IconButton(onClick = onSync) {
+            Icon(
+                Icons.Default.Refresh,
+                contentDescription = "Google Calendar sync",
+                tint = if (state.syncOn) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }

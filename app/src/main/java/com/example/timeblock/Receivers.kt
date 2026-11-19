@@ -44,5 +44,6 @@ class BootReceiver : BroadcastReceiver() {
         Reminders.createChannels(context)
         Reminders.rescheduleAll(context)
         Monitor.sync(context)
+        CalendarSync.armJob(context)
     }
 }

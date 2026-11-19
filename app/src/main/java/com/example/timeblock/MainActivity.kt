@@ -38,12 +38,31 @@ class MainActivity : ComponentActivity() {
             state.refreshPermissions()
         }
 
+    private val calendarLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
+            state.refreshPermissions()
+            if (state.hasCalendarPermission) {
+                CalendarSync.armJob(this)
+                state.syncTick++
+            } else if (result.values.any { !it } &&
+                !shouldShowRequestPermissionRationale(Manifest.permission.READ_CALENDAR)
+            ) {
+                // denied for good: send the user to the app's settings page
+                startActivity(
+                    Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))
+                )
+            }
+        }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Reminders.createChannels(this)
         state = PlannerState(applicationContext)
         state.onRequestNotif = ::requestNotifications
         state.onRequestExact = ::requestExactAlarms
+        state.onRequestCalendar = {
+            calendarLauncher.launch(arrayOf(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR))
+        }
         state.onRequestUsage = { startActivity(Usage.usageAccessIntent()) }
         state.onRequestOverlay = {
             startActivity(
@@ -67,6 +86,8 @@ class MainActivity : ComponentActivity() {
         state.refreshPermissions()
         Reminders.rescheduleAll(this) // picks up exact-alarm permission if just granted
         Monitor.sync(this) // starts/stops the app-timer service
+        CalendarSync.armJob(this) // wakes the app when the calendar changes
+        state.syncTick++ // pull calendar changes now
     }
 
     private fun requestNotifications() {
@@ -107,6 +128,14 @@ fun AppRoot(state: PlannerState) {
         while (true) {
             state.tick()
             delay(1000)
+        }
+    }
+
+    // Pull calendar changes when the app opens, then every 30 seconds while it is open
+    LaunchedEffect(state.syncTick) {
+        while (true) {
+            state.syncNow()
+            delay(30_000)
         }
     }
 

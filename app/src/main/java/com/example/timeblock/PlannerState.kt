@@ -12,6 +12,8 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.time.LocalDate
 
 class PlannerState(private val ctx: Context) {
@@ -35,6 +37,7 @@ class PlannerState(private val ctx: Context) {
     var onRequestExact: () -> Unit = {}
     var onRequestUsage: () -> Unit = {}
     var onRequestOverlay: () -> Unit = {}
+    var onRequestCalendar: () -> Unit = {}
 
     // App screen time + timers
     val limits = mutableStateMapOf<String, Int>().apply { putAll(store.loadLimits()) }
@@ -43,6 +46,17 @@ class PlannerState(private val ctx: Context) {
         private set
     var canOverlay by mutableStateOf(false)
         private set
+
+    // Google Calendar sync
+    var calendarId by mutableLongStateOf(store.calendarId)
+        private set
+    var hasCalendarPermission by mutableStateOf(false)
+        private set
+    var lastSync by mutableLongStateOf(0L)
+        private set
+    /** Bumped when the app comes back to the foreground, to trigger a sync. */
+    var syncTick by mutableIntStateOf(0)
+    val syncOn: Boolean get() = calendarId > 0 && hasCalendarPermission
 
     fun setLimit(key: String, minutes: Int) {
         if (minutes <= 0) limits.remove(key) else limits[key] = minutes
@@ -67,22 +81,82 @@ class PlannerState(private val ctx: Context) {
 
     fun newId(): Int = store.nextId()
 
+    private fun reloadFrom(list: List<Task>) {
+        if (tasks.toList() != list) {
+            tasks.clear()
+            tasks.addAll(list)
+        }
+    }
+
+    /** Applies a change to the stored tasks under the same lock the calendar sync uses. */
+    private fun mutate(block: (MutableList<Task>) -> Unit) {
+        synchronized(CalendarSync.LOCK) {
+            val list = store.loadTasks().toMutableList()
+            block(list)
+            store.saveTasks(list)
+            reloadFrom(list)
+        }
+    }
+
     fun upsert(t: Task) {
-        val i = tasks.indexOfFirst { it.id == t.id }
-        if (i >= 0) tasks[i] = t else tasks.add(t)
-        store.saveTasks(tasks.toList())
-        Reminders.schedule(ctx, t)
+        var saved = t
+        mutate { list ->
+            val i = list.indexOfFirst { it.id == t.id }
+            // the edit dialog doesn't know the calendar event id, keep the existing one
+            var task = if (t.eventId <= 0 && i >= 0) t.copy(eventId = list[i].eventId) else t
+            if (syncOn) task = CalendarSync.push(ctx, store.calendarId, task)
+            saved = task
+            if (i >= 0) list[i] = task else list.add(task)
+        }
+        Reminders.schedule(ctx, saved)
     }
 
     fun delete(id: Int) {
-        tasks.removeAll { it.id == id }
-        store.saveTasks(tasks.toList())
+        mutate { list ->
+            val t = list.firstOrNull { it.id == id }
+            if (t != null && t.eventId > 0 && syncOn) CalendarSync.deleteEvent(ctx, t.eventId)
+            list.removeAll { it.id == id }
+        }
         Reminders.cancel(ctx, id)
     }
 
     fun toggleDone(t: Task) = upsert(t.copy(done = !t.done))
 
     fun titleOf(id: Int): String? = tasks.firstOrNull { it.id == id }?.title
+
+    // ---- calendar sync ----
+    suspend fun syncNow() {
+        if (store.calendarId <= 0 || !CalendarSync.hasPermission(ctx)) return
+        val changed = withContext(Dispatchers.IO) {
+            try {
+                CalendarSync.syncStore(ctx)
+            } catch (e: Exception) {
+                false
+            }
+        }
+        if (changed) {
+            synchronized(CalendarSync.LOCK) { reloadFrom(store.loadTasks()) }
+        }
+        lastSync = System.currentTimeMillis()
+    }
+
+    fun selectCalendar(id: Long) {
+        synchronized(CalendarSync.LOCK) {
+            if (store.calendarId != id) {
+                // tasks belong to the old calendar's events: detach so they are pushed to the new one
+                val detached = store.loadTasks().map { it.copy(eventId = -1L) }
+                store.saveTasks(detached)
+                reloadFrom(detached)
+            }
+            store.calendarId = id
+        }
+        calendarId = id
+        CalendarSync.armJob(ctx)
+    }
+
+    fun disableSync() {
+        selectCalendar(-1L)
+    }
 
     // ---- focus ----
     private fun saveFocus() {
@@ -137,5 +211,6 @@ class PlannerState(private val ctx: Context) {
             !ctx.getSystemService(AlarmManager::class.java).canScheduleExactAlarms()
         hasUsageAccess = Usage.hasAccess(ctx)
         canOverlay = Usage.canOverlay(ctx)
+        hasCalendarPermission = CalendarSync.hasPermission(ctx)
     }
 }
