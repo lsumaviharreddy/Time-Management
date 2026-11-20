@@ -75,6 +75,7 @@ fun TaskDialog(
         )
     }
     var color by remember { mutableStateOf(initial?.colorIndex ?: 0) }
+    var carry by remember { mutableStateOf(initial?.carry ?: series?.carry ?: "") }
     var done by remember { mutableStateOf(initial?.done ?: false) }
     var repeat by remember { mutableStateOf(series?.rule ?: REPEAT_NONE) }
     var mask by remember {
@@ -109,6 +110,13 @@ fun TaskDialog(
                     onValueChange = { title = it },
                     label = { Text("What do you need to do?") },
                     singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = carry,
+                    onValueChange = { carry = it },
+                    label = { Text("Take with me (optional)") },
+                    placeholder = { Text("e.g. charger, ID card") },
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -284,7 +292,8 @@ fun TaskDialog(
                 }
 
                 Text(
-                    "You'll get a notification ${Reminders.LEAD_MIN} minutes before this starts.",
+                    "You'll get a notification ${Reminders.LEAD_MIN} minutes before this starts" +
+                        if (carry.isNotBlank()) ", with your take-with-me list." else ". Double-tap a task in the plan to mark it done.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -307,6 +316,7 @@ fun TaskDialog(
                                 durationMin = dur,
                                 done = done,
                                 colorIndex = color,
+                                carry = cleanCarry(carry),
                             )
                         )
                     } else {
@@ -323,6 +333,7 @@ fun TaskDialog(
                             endDate = until,
                             doneDates = if (initial == null) emptySet() else if (done) keepDone + date else keepDone - date,
                             skippedDates = series?.skippedDates ?: emptySet(),
+                            carry = cleanCarry(carry),
                         )
                         // a normal task turned into a repeating one
                         if (initial != null && initial.seriesId < 0) state.delete(initial.id)

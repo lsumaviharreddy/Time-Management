@@ -21,7 +21,10 @@ import java.time.format.DateTimeFormatter
 
 data class CalInfo(val id: Long, val name: String, val account: String)
 
-data class CalEvent(val id: Long, val title: String, val start: Long, val end: Long)
+data class CalEvent(val id: Long, val title: String, val start: Long, val end: Long, val desc: String? = null)
+
+/** An all-day "Due: ..." event, which is how a submission is stored in the calendar. */
+private class DueEvent(val id: Long, val title: String, val date: LocalDate, val desc: String?)
 
 /** A recurring event as stored in the calendar. */
 private class RecEvent(
@@ -31,6 +34,7 @@ private class RecEvent(
     val duration: String?,
     val rrule: String,
     val exdate: String?,
+    val desc: String?,
 )
 
 /** A recurring event translated into the app's own repeat model. */
@@ -43,6 +47,7 @@ private class ParsedSeries(
     val mask: Int,
     val endDate: LocalDate?,
     val skipped: Set<LocalDate>,
+    val carry: String,
 )
 
 /**
@@ -54,13 +59,18 @@ private class ParsedSeries(
  *   yearly, "first Monday", a fixed number of repeats) are left alone.
  * - A finished task is marked with a leading check mark in the event title, so "done" syncs too.
  *   Done ticks on single days of a repeating task stay in the app.
- * - All-day events are ignored.
+ * - A task's "take with me" list is stored as a "Take with me: ..." line in the event description.
+ * - A submission is an all-day event titled "Due: ...", with a "Due time: HH:MM" line when it has a time.
+ * - Other all-day events are ignored.
  */
 object CalendarSync {
     val LOCK = Any()
     private const val PAST_DAYS = 14L
     private const val FUTURE_DAYS = 120L
     private const val DONE_PREFIX = "✓ "
+    private const val DUE_PREFIX = "Due: "
+    private const val CARRY_PREFIX = "Take with me:"
+    private const val TIME_PREFIX = "Due time:"
     private const val JOB_ID = 4242
     private const val STATUS_CANCELED = 2
 
@@ -98,6 +108,32 @@ object CalendarSync {
 
     private fun eventTitle(t: Task) = if (t.done) DONE_PREFIX + t.title else t.title
 
+    /** Keeps any other text in the description and replaces only the "Take with me" line. */
+    private fun descFor(existing: String?, carry: String): String? {
+        val others = (existing ?: "").lines().filter { !it.trim().startsWith(CARRY_PREFIX) }
+        val c = cleanCarry(carry)
+        val all = if (c.isEmpty()) others else others + "$CARRY_PREFIX $c"
+        return all.joinToString("\n").trim().ifEmpty { null }
+    }
+
+    private fun parseCarry(desc: String?): String {
+        val line = (desc ?: "").lines().map { it.trim() }.firstOrNull { it.startsWith(CARRY_PREFIX) } ?: return ""
+        return cleanCarry(line.removePrefix(CARRY_PREFIX))
+    }
+
+    private fun ContentValues.putDescription(text: String?) {
+        if (text == null) putNull(Events.DESCRIPTION) else put(Events.DESCRIPTION, text)
+    }
+
+    private fun readDescription(ctx: Context, eventId: Long): String? = try {
+        ctx.contentResolver.query(
+            ContentUris.withAppendedId(Events.CONTENT_URI, eventId),
+            arrayOf(Events.DESCRIPTION), null, null, null,
+        )?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
+    } catch (e: Exception) {
+        null
+    }
+
     private fun timeValues(t: Task): ContentValues {
         val s = t.startMillis()
         return ContentValues().apply {
@@ -131,8 +167,13 @@ object CalendarSync {
 
     /** Writes [t] to the calendar (insert or update) and returns it with its event id filled in. */
     fun push(ctx: Context, calId: Long, t: Task): Task {
-        if (t.eventId > 0 && updateValues(ctx, t.eventId, timeValues(t))) return t
-        val id = insertValues(ctx, timeValues(t).apply { put(Events.CALENDAR_ID, calId) })
+        if (t.eventId > 0 &&
+            updateValues(ctx, t.eventId, timeValues(t).apply { putDescription(descFor(readDescription(ctx, t.eventId), t.carry)) })
+        ) return t
+        val id = insertValues(ctx, timeValues(t).apply {
+            put(Events.CALENDAR_ID, calId)
+            putDescription(descFor(null, t.carry))
+        })
         return t.copy(eventId = id)
     }
 
@@ -158,12 +199,13 @@ object CalendarSync {
         return base + until
     }
 
-    private fun seriesValues(s: Series): ContentValues {
+    private fun seriesValues(s: Series, existingDesc: String?): ContentValues {
         val zone = ZoneId.systemDefault()
         val first = s.firstOccurrence()
         val startMs = first.atTime(s.startMin / 60, s.startMin % 60).atZone(zone).toInstant().toEpochMilli()
         return ContentValues().apply {
             put(Events.TITLE, s.title)
+            putDescription(descFor(existingDesc, s.carry))
             put(Events.DTSTART, startMs)
             putNull(Events.DTEND) // recurring events use DURATION instead
             put(Events.DURATION, "P${s.durationMin * 60}S")
@@ -179,12 +221,78 @@ object CalendarSync {
 
     /** Writes a repeating task as one recurring event and returns it with its event id filled in. */
     fun pushSeries(ctx: Context, calId: Long, s: Series): Series {
-        if (s.eventId > 0 && updateValues(ctx, s.eventId, seriesValues(s))) return s
-        val id = insertValues(ctx, seriesValues(s).apply { put(Events.CALENDAR_ID, calId) })
+        if (s.eventId > 0 && updateValues(ctx, s.eventId, seriesValues(s, readDescription(ctx, s.eventId)))) return s
+        val id = insertValues(ctx, seriesValues(s, null).apply { put(Events.CALENDAR_ID, calId) })
         return s.copy(eventId = id)
     }
 
+    // ---- writing submissions (all-day events) ----
+
+    private const val DAY_MS = 86_400_000L
+
+    private fun utcMillis(d: LocalDate): Long = d.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+
+    private fun dueDescription(sub: Submission): String? {
+        val lines = ArrayList<String>()
+        if (sub.timeMin >= 0) lines.add("$TIME_PREFIX %02d:%02d".format(sub.timeMin / 60, sub.timeMin % 60))
+        if (sub.note.isNotBlank()) lines.add(sub.note.trim())
+        return lines.joinToString("\n").ifEmpty { null }
+    }
+
+    private fun dueValues(sub: Submission): ContentValues = ContentValues().apply {
+        put(Events.TITLE, (if (sub.done) DONE_PREFIX else "") + DUE_PREFIX + sub.title)
+        put(Events.DTSTART, utcMillis(sub.date))
+        put(Events.DTEND, utcMillis(sub.date) + DAY_MS)
+        put(Events.ALL_DAY, 1)
+        put(Events.EVENT_TIMEZONE, "UTC")
+        putDescription(dueDescription(sub))
+    }
+
+    fun pushSubmission(ctx: Context, calId: Long, sub: Submission): Submission {
+        if (sub.eventId > 0 && updateValues(ctx, sub.eventId, dueValues(sub))) return sub
+        val id = insertValues(ctx, dueValues(sub).apply { put(Events.CALENDAR_ID, calId) })
+        return sub.copy(eventId = id)
+    }
+
     // ---- reading from the calendar ----
+
+    private fun readDue(ctx: Context, calId: Long, from: LocalDate, to: LocalDate): List<DueEvent> {
+        val out = mutableListOf<DueEvent>()
+        val sel = "${Events.CALENDAR_ID} = ? AND ${Events.DELETED} = 0 AND ${Events.ALL_DAY} = 1 " +
+            "AND $NOT_CANCELED AND ${Events.DTSTART} >= ? AND ${Events.DTSTART} < ?"
+        ctx.contentResolver.query(
+            Events.CONTENT_URI,
+            arrayOf(Events._ID, Events.TITLE, Events.DTSTART, Events.DESCRIPTION),
+            sel,
+            arrayOf(calId.toString(), utcMillis(from).toString(), utcMillis(to).toString()),
+            null,
+        )?.use { c ->
+            while (c.moveToNext()) {
+                val title = (c.getString(1) ?: "").trim()
+                if (!title.removePrefix(DONE_PREFIX.trim()).trim().startsWith(DUE_PREFIX.trim())) continue
+                val date = Instant.ofEpochMilli(c.getLong(2)).atZone(ZoneOffset.UTC).toLocalDate()
+                out.add(DueEvent(c.getLong(0), title, date, c.getString(3)))
+            }
+        }
+        return out
+    }
+
+    private fun applyDue(sub: Submission, ev: DueEvent): Submission {
+        val done = ev.title.startsWith(DONE_PREFIX.trim())
+        val title = ev.title.removePrefix(DONE_PREFIX.trim()).trim().removePrefix(DUE_PREFIX.trim()).trim()
+        var time = -1
+        val note = ArrayList<String>()
+        for (line in (ev.desc ?: "").lines()) {
+            val l = line.trim()
+            if (l.startsWith(TIME_PREFIX)) {
+                val m = Regex("(\\d{1,2}):(\\d{2})").find(l)
+                if (m != null) time = (m.groupValues[1].toInt() * 60 + m.groupValues[2].toInt()).coerceIn(0, 1439)
+            } else if (l.isNotEmpty()) {
+                note.add(l)
+            }
+        }
+        return sub.copy(title = title.ifEmpty { "(no title)" }, date = ev.date, timeMin = time, note = note.joinToString("\n"), done = done)
+    }
 
     private fun readEvents(ctx: Context, calId: Long, fromMs: Long, toMs: Long): List<CalEvent> {
         val out = mutableListOf<CalEvent>()
@@ -193,7 +301,7 @@ object CalendarSync {
             "AND ${Events.DTSTART} >= ? AND ${Events.DTSTART} < ?"
         ctx.contentResolver.query(
             Events.CONTENT_URI,
-            arrayOf(Events._ID, Events.TITLE, Events.DTSTART, Events.DTEND),
+            arrayOf(Events._ID, Events.TITLE, Events.DTSTART, Events.DTEND, Events.DESCRIPTION),
             sel,
             arrayOf(calId.toString(), fromMs.toString(), toMs.toString()),
             null,
@@ -201,7 +309,7 @@ object CalendarSync {
             while (c.moveToNext()) {
                 val start = c.getLong(2)
                 val end = if (c.isNull(3)) start + 30 * 60_000L else c.getLong(3)
-                out.add(CalEvent(c.getLong(0), c.getString(1) ?: "", start, end))
+                out.add(CalEvent(c.getLong(0), c.getString(1) ?: "", start, end, c.getString(4)))
             }
         }
         return out
@@ -213,7 +321,7 @@ object CalendarSync {
             "AND ${Events.RRULE} IS NOT NULL AND $NOT_CANCELED AND ${Events.DTSTART} < ?"
         ctx.contentResolver.query(
             Events.CONTENT_URI,
-            arrayOf(Events._ID, Events.TITLE, Events.DTSTART, Events.DURATION, Events.RRULE, Events.EXDATE),
+            arrayOf(Events._ID, Events.TITLE, Events.DTSTART, Events.DURATION, Events.RRULE, Events.EXDATE, Events.DESCRIPTION),
             sel,
             arrayOf(calId.toString(), toMs.toString()),
             null,
@@ -227,6 +335,7 @@ object CalendarSync {
                         duration = c.getString(3),
                         rrule = c.getString(4) ?: continue,
                         exdate = c.getString(5),
+                        desc = c.getString(6),
                     )
                 )
             }
@@ -335,6 +444,7 @@ object CalendarSync {
             mask = if (rule == REPEAT_WEEKLY) mask else 0,
             endDate = parts["UNTIL"]?.let { stampToDate(it) },
             skipped = (ev.exdate ?: "").split(",").mapNotNull { if (it.isBlank()) null else stampToDate(it) }.toSet(),
+            carry = parseCarry(ev.desc),
         )
     }
 
@@ -350,6 +460,7 @@ object CalendarSync {
             startMin = startMin,
             durationMin = dur,
             done = raw.startsWith(DONE_PREFIX.trim()),
+            carry = parseCarry(ev.desc),
         )
     }
 
@@ -362,6 +473,7 @@ object CalendarSync {
         weekdayMask = p.mask,
         endDate = p.endDate,
         skippedDates = p.skipped + (exceptions ?: emptySet()),
+        carry = p.carry,
     )
 
     /**
@@ -476,7 +588,51 @@ object CalendarSync {
         }
         if (seriesChanged) store.saveSeries(outSeries)
 
-        changed || seriesChanged
+        // ---- submissions (all-day "Due: ..." events) ----
+        val fromDay = today.minusDays(PAST_DAYS)
+        val toDay = today.plusDays(FUTURE_DAYS)
+        val dueEvents = readDue(ctx, calId, fromDay, toDay)
+        val dueById = dueEvents.associateBy { it.id }
+        var subsChanged = false
+        val outSubs = ArrayList<Submission>()
+        for (sub in store.loadSubmissions()) {
+            if (sub.eventId > 0) {
+                val ev = dueById[sub.eventId]
+                if (ev == null) {
+                    if (sub.date >= fromDay && sub.date < toDay) {
+                        // deleted in the calendar
+                        Reminders.cancelSubmission(ctx, sub.id)
+                        subsChanged = true
+                    } else {
+                        outSubs.add(sub)
+                    }
+                } else {
+                    val merged = applyDue(sub, ev)
+                    if (merged != sub) {
+                        subsChanged = true
+                        Reminders.scheduleSubmission(ctx, merged)
+                    }
+                    outSubs.add(merged)
+                }
+            } else if (sub.date >= fromDay) {
+                val pushed = pushSubmission(ctx, calId, sub)
+                if (pushed.eventId != sub.eventId) subsChanged = true
+                outSubs.add(pushed)
+            } else {
+                outSubs.add(sub)
+            }
+        }
+        val knownDue = outSubs.map { it.eventId }.filter { it > 0 }.toSet()
+        for (ev in dueEvents) {
+            if (ev.id in knownDue) continue
+            val sub = applyDue(Submission(id = store.nextId(), title = "", date = today, eventId = ev.id), ev)
+            outSubs.add(sub)
+            Reminders.scheduleSubmission(ctx, sub)
+            subsChanged = true
+        }
+        if (subsChanged) store.saveSubmissions(outSubs)
+
+        changed || seriesChanged || subsChanged
     }
 
     // ---- background trigger ----

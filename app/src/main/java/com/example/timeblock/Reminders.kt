@@ -8,18 +8,18 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import java.time.LocalDate
+import java.time.ZoneId
 
 /**
- * Schedules a notification [LEAD_MIN] minutes before each task starts,
- * plus one alarm for the end of a focus/break session.
+ * Schedules a notification [LEAD_MIN] minutes before each task starts (with its "take with me" list),
+ * and two reminders for each submission (the day before and on the day).
  */
 object Reminders {
     const val LEAD_MIN = 5
     const val CH_TASKS = "task_reminders"
-    const val CH_FOCUS = "focus_timer"
     const val CH_LIMITS = "app_limits"
     const val CH_MONITOR = "app_monitor"
-    private const val FOCUS_REQ = 1_000_000_000
+    private const val SUB_REQ = 1_100_000_000
 
     fun createChannels(ctx: Context) {
         val nm = ctx.getSystemService(NotificationManager::class.java)
@@ -28,11 +28,7 @@ object Reminders {
                 description = "Heads-up $LEAD_MIN minutes before a task starts"
             }
         )
-        nm.createNotificationChannel(
-            NotificationChannel(CH_FOCUS, "Focus timer", NotificationManager.IMPORTANCE_HIGH).apply {
-                description = "Tells you when a focus or break session ends"
-            }
-        )
+        nm.deleteNotificationChannel("focus_timer") // the focus timer was replaced by the study stopwatch
         nm.createNotificationChannel(
             NotificationChannel(CH_LIMITS, "App timer alerts", NotificationManager.IMPORTANCE_HIGH).apply {
                 description = "Warnings when an app timer is about to run out or has run out"
@@ -89,6 +85,7 @@ object Reminders {
             putExtra("id", task.id)
             putExtra("title", task.title)
             putExtra("text", "Starts in $LEAD_MIN min · ${fmtTime(task.startMin)}")
+            putExtra("carry", cleanCarry(task.carry))
         }
         setAlarm(ctx, at, pi)
     }
@@ -111,23 +108,46 @@ object Reminders {
         for (i in 0..SERIES_DAYS) cancelRequest(ctx, occurrenceId(s.id, today.plusDays(i.toLong())))
     }
 
-    fun scheduleFocusEnd(ctx: Context, endMillis: Long, isBreak: Boolean) {
-        val pi = pending(ctx, FOCUS_REQ) {
-            putExtra("kind", "focus")
-            putExtra("title", if (isBreak) "Break is over" else "Focus session complete")
-            putExtra("text", if (isBreak) "Ready for the next block?" else "Nice work. Time for a short break.")
+    // ---- submissions ----
+    private fun subReq(id: Int, which: Int) = SUB_REQ + id * 2 + which
+
+    fun scheduleSubmission(ctx: Context, sub: Submission) {
+        cancelSubmission(ctx, sub.id)
+        if (sub.done) return
+        val zone = ZoneId.systemDefault()
+        fun at(date: LocalDate, minute: Int) =
+            date.atTime(minute / 60, minute % 60).atZone(zone).toInstant().toEpochMilli()
+        val whenText = if (sub.timeMin >= 0) " at ${fmtTime(sub.timeMin)}" else ""
+        val dayBefore = at(sub.date.minusDays(1), 9 * 60)
+        val onDay = at(sub.date, if (sub.timeMin >= 0) maxOf(0, sub.timeMin - 120) else 8 * 60)
+        val now = System.currentTimeMillis()
+        if (dayBefore > now) {
+            setAlarm(ctx, dayBefore, pending(ctx, subReq(sub.id, 0)) {
+                putExtra("kind", "submission")
+                putExtra("nid", 5_000_000 + sub.id * 2)
+                putExtra("title", "Due tomorrow: ${sub.title}")
+                putExtra("text", "Submission is due tomorrow$whenText.")
+            })
         }
-        setAlarm(ctx, endMillis, pi)
+        if (onDay > now) {
+            setAlarm(ctx, onDay, pending(ctx, subReq(sub.id, 1)) {
+                putExtra("kind", "submission")
+                putExtra("nid", 5_000_000 + sub.id * 2 + 1)
+                putExtra("title", "Due today: ${sub.title}")
+                putExtra("text", "Submission is due today$whenText.")
+            })
+        }
     }
 
-    fun cancelFocusEnd(ctx: Context) = cancelRequest(ctx, FOCUS_REQ)
+    fun cancelSubmission(ctx: Context, id: Int) {
+        cancelRequest(ctx, subReq(id, 0))
+        cancelRequest(ctx, subReq(id, 1))
+    }
 
     fun rescheduleAll(ctx: Context) {
         val store = Store(ctx)
         store.loadTasks().forEach { schedule(ctx, it) }
         store.loadSeries().forEach { scheduleSeries(ctx, it) }
-        if (store.focusEnd > System.currentTimeMillis()) {
-            scheduleFocusEnd(ctx, store.focusEnd, store.focusBreak)
-        }
+        store.loadSubmissions().forEach { scheduleSubmission(ctx, it) }
     }
 }

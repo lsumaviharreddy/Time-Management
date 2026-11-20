@@ -115,11 +115,11 @@ fun ReviewScreen(state: PlannerState) {
 
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             StatCard("Tasks done", "$doneTasks / $totalTasks", "$rate% complete", Modifier.weight(1f))
-            StatCard("Focus time", fmtDuration(totalFocus), "of ${fmtDuration(totalPlanned)} planned", Modifier.weight(1f))
+            StatCard("Study time", fmtDuration(totalFocus), "of ${fmtDuration(totalPlanned)} planned", Modifier.weight(1f))
         }
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             StatCard(
-                "Best focus day",
+                "Best study day",
                 bestDay?.let { it.date.dayOfWeek.name.take(3).lowercase().replaceFirstChar { c -> c.uppercase() } } ?: "—",
                 bestDay?.let { fmtDuration(it.focusMin) } ?: "No sessions yet",
                 Modifier.weight(1f),
@@ -134,10 +134,10 @@ fun ReviewScreen(state: PlannerState) {
 
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Planned vs focused", style = MaterialTheme.typography.titleMedium)
+                Text("Planned vs studied", style = MaterialTheme.typography.titleMedium)
                 Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
                     Legend(planColor, "Planned")
-                    Legend(focusColor, "Focused")
+                    Legend(focusColor, "Studied")
                 }
 
                 val maxV = maxOf(60, days.maxOf { maxOf(it.plannedMin, it.focusMin) }).toFloat()

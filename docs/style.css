@@ -128,3 +128,10 @@ html[data-theme="black"] .warn { color: #ffcc80; }
   .grid2 { grid-template-columns: 1fr; }
   .cell { min-height: 56px; }
 }
+
+.item.overdue { border-color: var(--danger); background: rgba(198,40,40,.08); }
+.item input[type=checkbox] { width: 18px; height: 18px; }
+.item .left { font-size: 13px; white-space: nowrap; }
+.item.overdue .left { color: var(--danger); }
+.blk { touch-action: manipulation; user-select: none; }
+.focuschip { cursor: pointer; }

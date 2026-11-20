@@ -16,6 +16,7 @@ data class Task(
     val colorIndex: Int = 0,
     val eventId: Long = -1L, // Google Calendar event id, -1 if not synced
     val seriesId: Int = -1,  // >= 0 when this is one occurrence of a repeating task
+    val carry: String = "",  // "take with me" items, comma separated
 ) {
     val endMin: Int get() = startMin + durationMin
 
@@ -26,7 +27,36 @@ data class Task(
             .toEpochMilli()
 }
 
+/** One study session recorded by the stopwatch. */
 data class FocusSession(val date: LocalDate, val minutes: Int, val taskId: Int)
+
+/** A submission / deadline. [timeMin] is minutes after midnight, or -1 when only the day matters. */
+data class Submission(
+    val id: Int,
+    val title: String,
+    val date: LocalDate,
+    val timeMin: Int = -1,
+    val note: String = "",
+    val done: Boolean = false,
+    val eventId: Long = -1L, // all-day Google Calendar event id, -1 if not synced
+)
+
+/** "charger,  ID card" -> ["charger", "ID card"] */
+fun carryItems(carry: String): List<String> =
+    carry.split(",", "\n").map { it.trim() }.filter { it.isNotEmpty() }
+
+fun cleanCarry(carry: String): String = carryItems(carry).joinToString(", ")
+
+fun daysLeftText(due: LocalDate, today: LocalDate = LocalDate.now()): String {
+    val n = java.time.temporal.ChronoUnit.DAYS.between(today, due).toInt()
+    return when {
+        n == 0 -> "Due today"
+        n == 1 -> "Due tomorrow"
+        n > 1 -> "$n days left"
+        n == -1 -> "1 day overdue"
+        else -> "${-n} days overdue"
+    }
+}
 
 private val timeFormat: DateTimeFormatter
     get() = DateTimeFormatter.ofPattern("h:mm a", Locale.getDefault())

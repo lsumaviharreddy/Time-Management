@@ -29,6 +29,23 @@ const lsGet = (k, def) => { try { const v = localStorage.getItem('tb_' + k); ret
 const lsSet = (k, v) => { try { localStorage.setItem('tb_' + k, JSON.stringify(v)); } catch { /* storage blocked */ } };
 const lsDel = (k) => { try { localStorage.removeItem('tb_' + k); } catch { /* ignore */ } };
 
+const cleanCarry = (s) => String(s || '').split(/[,\n]/).map((x) => x.trim()).filter(Boolean).join(', ');
+const CARRY_PREFIX = 'Take with me:';
+const parseCarry = (desc) => {
+  const line = String(desc || '').split('\n').map((l) => l.trim()).find((l) => l.startsWith(CARRY_PREFIX));
+  return line ? cleanCarry(line.slice(CARRY_PREFIX.length)) : '';
+};
+// keeps any other text in the description and replaces only the "Take with me" line
+const descFor = (raw, carry) => {
+  const others = String(raw || '').split('\n').filter((l) => !l.trim().startsWith(CARRY_PREFIX));
+  const c = cleanCarry(carry);
+  return (c ? others.concat(`${CARRY_PREFIX} ${c}`) : others).join('\n').trim();
+};
+const daysLeft = (dateStr) => {
+  const n = Math.round((parseYmd(dateStr) - todayD()) / 86400000);
+  return n === 0 ? 'Due today' : n === 1 ? 'Due tomorrow' : n > 1 ? `${n} days left` : n === -1 ? '1 day overdue' : `${-n} days overdue`;
+};
+
 /* ---------- repeating rules (same model as the Android app) ---------- */
 // rule: 0 none, 1 daily, 2 weekly (mask bit0 = Monday), 3 monthly (same day number)
 function matchesRule(s, d) {
@@ -72,7 +89,7 @@ const Local = {
       for (let d = parseYmd(a); ymd(d) <= b; d = addDays(d, 1)) {
         if (occursOn(s, d)) {
           const ds = ymd(d);
-          out.push({ id: `s${s.id}|${ds}`, title: s.title, date: ds, start: s.start, dur: s.dur, done: (s.doneDates || []).includes(ds), color: s.color, seriesId: s.id });
+          out.push({ id: `s${s.id}|${ds}`, title: s.title, date: ds, start: s.start, dur: s.dur, done: (s.doneDates || []).includes(ds), color: s.color, seriesId: s.id, carry: s.carry || '' });
         }
       }
     }
@@ -101,6 +118,13 @@ const Local = {
     Local.save(db);
   },
   async deleteSeries(id) { const db = Local.db(); db.series = db.series.filter((x) => x.id !== id); Local.save(db); },
+  async subs() { return (Local.db().subs || []).map((s) => ({ ...s })); },
+  async saveSub(s) {
+    const db = Local.db(); db.subs = db.subs || [];
+    if (s.id) { const i = db.subs.findIndex((x) => x.id === s.id); if (i >= 0) db.subs[i] = { ...s }; } else { db.subs.push({ ...s, id: 'u' + db.next++ }); }
+    Local.save(db);
+  },
+  async deleteSub(id) { const db = Local.db(); db.subs = (db.subs || []).filter((x) => x.id !== id); Local.save(db); },
 };
 
 /* ---------- Google Calendar backend ---------- */
@@ -115,7 +139,7 @@ function evToTask(ev) {
   let title = ev.summary || '(no title)', done = false;
   if (title.startsWith('✓')) { done = true; title = title.replace(/^✓\s*/, ''); }
   const color = parseInt(((ev.extendedProperties || {}).private || {}).tb_color || '0', 10) || 0;
-  return { id: ev.id, title, date: ymd(s), start, dur, done, color, seriesId: ev.recurringEventId || null };
+  return { id: ev.id, title, date: ymd(s), start, dur, done, color, seriesId: ev.recurringEventId || null, carry: parseCarry(ev.description), rawDesc: ev.description || '' };
 }
 function parseUntil(v) {
   if (!v) return null;
@@ -145,7 +169,7 @@ function evToSeries(ev) {
     if (p.BYDAY || (p.BYMONTHDAY && parseInt(p.BYMONTHDAY, 10) !== s.getDate())) complex = true;
   } else { complex = true; }
   const t = evToTask({ ...ev, recurringEventId: null });
-  return { id: ev.id, title: t ? t.title : (ev.summary || ''), startDate: ymd(s), start: s.getHours() * 60 + s.getMinutes(), dur: Math.max(5, Math.round((e - s) / 60000)), color: t ? t.color : 0, rule, mask, endDate: parseUntil(p.UNTIL), complex, skipped: [] };
+  return { id: ev.id, title: t ? t.title : (ev.summary || ''), startDate: ymd(s), start: s.getHours() * 60 + s.getMinutes(), dur: Math.max(5, Math.round((e - s) / 60000)), color: t ? t.color : 0, rule, mask, endDate: parseUntil(p.UNTIL), complex, skipped: [], carry: parseCarry(ev.description), rawDesc: ev.description || '' };
 }
 function rrule(s) {
   let r = 'RRULE:FREQ=' + (s.rule === 1 ? 'DAILY' : s.rule === 2 ? 'WEEKLY' : 'MONTHLY');
@@ -158,11 +182,39 @@ function rrule(s) {
   return r;
 }
 function bodyFor(t, dateStr) {
-  return {
+  const body = {
     summary: (t.done ? '✓ ' : '') + t.title,
     start: { dateTime: localDT(dateStr, t.start), timeZone: TZ },
     end: { dateTime: localDT(dateStr, t.start + t.dur), timeZone: TZ },
     extendedProperties: { private: { tb_color: String(t.color || 0) } },
+  };
+  const d = descFor(t.rawDesc, t.carry);
+  if (d || t.rawDesc) body.description = d;
+  return body;
+}
+function evToSub(ev) {
+  if (ev.status === 'cancelled' || !ev.start || !ev.start.date) return null; // submissions are all-day events
+  let title = (ev.summary || '').trim(), done = false;
+  if (title.startsWith('✓')) { done = true; title = title.replace(/^✓\s*/, ''); }
+  if (!title.startsWith('Due:')) return null;
+  title = title.slice(4).trim() || '(no title)';
+  let time = -1; const note = [];
+  String(ev.description || '').split('\n').forEach((l) => {
+    const t = l.trim();
+    if (t.startsWith('Due time:')) { const m = /(\d{1,2}):(\d{2})/.exec(t); if (m) time = Math.min(1439, +m[1] * 60 + +m[2]); } else if (t) note.push(t);
+  });
+  return { id: ev.id, title, date: ev.start.date, time, note: note.join('\n'), done };
+}
+function subBody(s) {
+  const lines = [];
+  if (s.time >= 0) lines.push(`Due time: ${fromMin(s.time)}`);
+  if (s.note && s.note.trim()) lines.push(s.note.trim());
+  return {
+    summary: (s.done ? '✓ ' : '') + 'Due: ' + s.title,
+    start: { date: s.date },
+    end: { date: ymd(addDays(parseYmd(s.date), 1)) },
+    description: lines.join('\n'),
+    transparency: 'transparent',
   };
 }
 
@@ -216,6 +268,15 @@ const G = {
     else await G.req('POST', G.ev(), body);
   },
   async deleteSeries(id) { await G.req('DELETE', `${G.ev()}/${encodeURIComponent(id)}`); },
+  async subs() {
+    const items = await G.list({ singleEvents: 'true', orderBy: 'startTime', timeMin: addDays(todayD(), -30).toISOString(), timeMax: addDays(todayD(), 400).toISOString() });
+    return items.map(evToSub).filter(Boolean);
+  },
+  async saveSub(s) {
+    if (s.id) await G.req('PATCH', `${G.ev()}/${encodeURIComponent(s.id)}`, subBody(s));
+    else await G.req('POST', G.ev(), subBody(s));
+  },
+  async deleteSub(id) { await G.req('DELETE', `${G.ev()}/${encodeURIComponent(id)}`); },
 };
 const api = () => (S.mode === 'google' ? G : Local);
 
@@ -226,7 +287,7 @@ const S = {
   theme: lsGet('theme', 'white'),
   view: lsGet('view', 'day'),
   date: todayD(),
-  tasks: [], error: null, lastSync: null,
+  tasks: [], subs: [], error: null, lastSync: null,
   calId: lsGet('calId', null), calName: lsGet('calName', ''),
   token: lsGet('tok', null), needAuth: false,
   needScroll: true,
@@ -295,9 +356,16 @@ async function load() {
   if (S.mode === 'google' && (!validToken() || !S.calId)) { if (!validToken()) S.needAuth = true; render(); return; }
   const seq = ++loadSeq; const [a, b] = viewRange();
   try {
-    const ts = await api().range(a, b);
-    if (seq !== loadSeq) return;
-    S.tasks = ts; S.error = null; S.lastSync = new Date();
+    if (S.view === 'due') {
+      const subs = await api().subs();
+      if (seq !== loadSeq) return;
+      S.subs = subs;
+    } else {
+      const ts = await api().range(a, b);
+      if (seq !== loadSeq) return;
+      S.tasks = ts;
+    }
+    S.error = null; S.lastSync = new Date();
   } catch (e) { if (e.message !== 'auth') S.error = e.message; }
   render();
 }
@@ -329,11 +397,23 @@ function placements(list) {
   });
   flush(); return out;
 }
+// Tasks with the same title on one day become a single block in the week view.
+function mergeGroup(list) {
+  const g = [...list].sort((a, b) => a.start - b.start);
+  const start = g[0].start, end = Math.min(1440, Math.max(...g.map((t) => t.start + t.dur)));
+  return { ...g[0], id: 'g:' + g[0].id, title: `${g[0].title} ×${g.length}`, start, dur: end - start, done: g.every((t) => t.done), group: g, seriesId: null };
+}
+function groupDay(list) {
+  const map = new Map();
+  list.forEach((t) => { const k = t.title.trim().toLowerCase(); if (!map.has(k)) map.set(k, []); map.get(k).push(t); });
+  return [...map.values()].map((g) => (g.length === 1 ? g[0] : mergeGroup(g)));
+}
 function blockHtml(p, compact) {
   const { t, lane, lanes } = p;
   const h = Math.max(t.dur / 60 * HP - 2, 16);
-  const time = `${fmtTime(t.start)} – ${fmtTime(t.start + t.dur)}`;
-  return `<div class="blk ${t.done ? 'done' : ''} ${t.seriesId ? 'rep' : ''}" data-a="task" data-id="${esc(t.id)}" title="${esc(t.title)} · ${time}"
+  const time = t.group ? `${t.group.length} tasks` : `${fmtTime(t.start)} – ${fmtTime(t.start + t.dur)}`;
+  const target = t.group ? `data-a="group" data-ids="${esc(t.group.map((x) => x.id).join(','))}"` : `data-a="task" data-id="${esc(t.id)}"`;
+  return `<div class="blk ${t.done ? 'done' : ''} ${t.seriesId ? 'rep' : ''}" ${target} title="${esc(t.title)} · ${time}${t.carry ? ' · Take: ' + esc(t.carry) : ''}"
     style="top:${t.start / 60 * HP}px;height:${h}px;left:${lane / lanes * 100}%;width:calc(${100 / lanes}% - 3px);background:${TASK_COLORS[t.color] || TASK_COLORS[0]}">
     <div class="t">${esc(t.title)}</div>${h >= 34 && !compact ? `<div class="m">${time}</div>` : ''}</div>`;
 }
@@ -351,7 +431,8 @@ function gridHtml(dates) {
   }
   const cols = dates.map((d) => {
     const ds = ymd(d);
-    const ps = placements(S.tasks.filter((t) => t.date === ds));
+    const dayTasks = S.tasks.filter((t) => t.date === ds);
+    const ps = placements(compact ? groupDay(dayTasks) : dayTasks);
     return `<div class="col ${ds === today ? 'today' : ''}" data-a="col" data-date="${ds}">${lines}${ps.map((p) => blockHtml(p, compact)).join('')}${ds === today ? `<div class="nowline" style="top:${nowMin / 60 * HP}px"></div>` : ''}</div>`;
   }).join('');
   return `${heads}<div class="scroll"><div class="grid ${compact ? 'compact' : ''}" style="height:${24 * HP}px"><div class="gutter">${gut}</div><div class="cols">${cols}</div></div></div>`;
@@ -371,9 +452,23 @@ function monthHtml() {
   return `<div class="month"><div class="mhead">${DAY_SHORT.map((d) => `<div>${d}</div>`).join('')}</div><div class="mgrid">${cells}</div>
     <div class="dayhead"><h3>${fmtDayLong(S.date)}</h3><button class="btn" data-a="openday" data-date="${sel}">Open day</button><button class="btn primary" data-a="add">+ Add task</button></div>${items}</div>`;
 }
+function dueHtml() {
+  const today = ymd(todayD());
+  const key = (s) => s.date + ' ' + pad(Math.floor((s.time < 0 ? 1440 : s.time) / 60)) + pad((s.time < 0 ? 0 : s.time) % 60);
+  const open = S.subs.filter((s) => !s.done).sort((a, b) => key(a).localeCompare(key(b)));
+  const done = S.subs.filter((s) => s.done).sort((a, b) => b.date.localeCompare(a.date));
+  const row = (s) => `<div class="item ${s.done ? 'done' : ''} ${!s.done && s.date < today ? 'overdue' : ''}" data-a="subedit" data-id="${esc(s.id)}">
+    <input type="checkbox" data-a="subdone" data-id="${esc(s.id)}" ${s.done ? 'checked' : ''} title="Mark done">
+    <div style="flex:1"><div class="tt">${esc(s.title)}</div><div class="tm">${fmtDayLong(parseYmd(s.date))}${s.time >= 0 ? ' · ' + fmtTime(s.time) : ''}${s.note ? ' · ' + esc(s.note.split('\n')[0]) : ''}</div></div>
+    ${s.done ? '' : `<b class="left">${daysLeft(s.date)}</b>`}</div>`;
+  return `<div class="month"><div class="dayhead"><h3>Submission dates</h3><button class="btn primary" data-a="add">+ Add</button></div>
+    <div class="note" style="margin-bottom:8px">Reminders: the day before at 9 AM and on the day (while this tab is open). The phone app reminds you even when closed.</div>
+    ${open.length ? open.map(row).join('') : '<div class="empty">Nothing due. Add a deadline.</div>'}
+    ${done.length ? `<div class="dayhead"><h3 style="font-size:14px;color:var(--muted)">Done</h3></div>${done.map(row).join('')}` : ''}</div>`;
+}
 function itemHtml(t) {
   return `<div class="item ${t.done ? 'done' : ''}" data-a="task" data-id="${esc(t.id)}"><div class="bar" style="background:${TASK_COLORS[t.color] || TASK_COLORS[0]}"></div>
-    <div><div class="tt">${esc(t.title)}${t.seriesId ? ' ↻' : ''}</div><div class="tm">${fmtTime(t.start)} – ${fmtTime(t.start + t.dur)} · ${fmtDur(t.dur)}${t.done ? ' · done' : ''}</div></div></div>`;
+    <div><div class="tt">${esc(t.title)}${t.seriesId ? ' ↻' : ''}</div><div class="tm">${fmtTime(t.start)} – ${fmtTime(t.start + t.dur)} · ${fmtDur(t.dur)}${t.done ? ' · done' : ''}${t.carry ? ' · Take: ' + esc(t.carry) : ''}</div></div></div>`;
 }
 
 /* ---------- main render ---------- */
@@ -409,15 +504,16 @@ function render() {
     if (S.mode === 'google' && S.needAuth) banner = `<div class="banner"><span>Session expired. Sign in again to keep syncing.</span><span class="sp"></span><button class="btn primary" data-a="signin">Reconnect</button></div>`;
     if (S.error) banner += `<div class="banner" style="background:rgba(198,40,40,.15)"><span>${esc(S.error)}</span><span class="sp"></span><button class="btn" data-a="refresh">Retry</button></div>`;
     const sync = S.mode === 'google' ? (S.lastSync ? `Synced ${fmtTime(S.lastSync.getHours() * 60 + S.lastSync.getMinutes())}${S.calName ? ' · ' + esc(S.calName) : ''}` : 'Not synced') : 'Demo';
-    const focusChip = F.end ? `<span class="focuschip" id="focuschip" data-a="focus">${fmtClock(F.end - Date.now())}</span>` : '';
+    const focusChip = SW.start ? `<span class="focuschip" id="swchip" data-a="study" title="Study stopwatch">⏱ ${fmtHMS(Date.now() - SW.start)}</span>` : '';
     let body;
     if (S.mode === 'google' && !validToken() && !S.tasks.length) body = `<div class="welcome"><div class="card"><div class="note">Sign in to load your calendar.</div><button class="btn primary" data-a="signin">Sign in with Google</button></div></div>`;
+    else if (S.view === 'due') body = dueHtml();
     else if (S.view === 'month') body = monthHtml();
     else body = gridHtml(S.view === 'day' ? [S.date] : Array.from({ length: 7 }, (_, i) => addDays(mondayOf(S.date), i)));
     app.innerHTML = `<div class="shell"><header>
       <div class="row1"><h1>TimeBlock</h1><span class="sp"></span>${focusChip}<span class="sync ${S.error ? 'err' : ''}">${sync}</span><button class="ibtn" data-a="refresh" title="Sync now">⟳</button><button class="ibtn" data-a="menu" title="Menu">⋮</button></div>
-      <div class="row2"><button class="ibtn" data-a="prev">‹</button><button class="btn" data-a="today">Today</button><button class="ibtn" data-a="next">›</button><span class="ptitle">${titleText()}</span>
-        <div class="chips">${['day', 'week', 'month'].map((v) => `<button class="chip ${S.view === v ? 'on' : ''}" data-a="view" data-v="${v}">${v[0].toUpperCase() + v.slice(1)}</button>`).join('')}</div>
+      <div class="row2">${S.view === 'due' ? '<span class="ptitle">Submissions</span>' : `<button class="ibtn" data-a="prev">‹</button><button class="btn" data-a="today">Today</button><button class="ibtn" data-a="next">›</button><span class="ptitle">${titleText()}</span>`}
+        <div class="chips">${['day', 'week', 'month', 'due'].map((v) => `<button class="chip ${S.view === v ? 'on' : ''}" data-a="view" data-v="${v}">${v[0].toUpperCase() + v.slice(1)}</button>`).join('')}</div>
         <button class="btn primary" data-a="add">+ Add</button></div></header>${banner}<main>${body}</main></div>`;
     const sc = $('.scroll');
     if (sc) {
@@ -431,6 +527,7 @@ function render() {
 }
 
 /* ---------- actions ---------- */
+let clickTimer = null;
 const findTask = (id) => S.tasks.find((t) => t.id === id);
 function defaultStart(d) {
   if (ymd(d) !== ymd(todayD())) return 9 * 60;
@@ -441,8 +538,17 @@ const actions = {
   next() { S.view === 'month' ? setDate(new Date(S.date.getFullYear(), S.date.getMonth() + 1, 1)) : setDate(addDays(S.date, S.view === 'week' ? 7 : 1)); },
   today() { setDate(todayD()); },
   view(el) { S.view = el.dataset.v; lsSet('view', S.view); S.needScroll = true; load(); },
-  add() { taskForm(null, { date: ymd(S.date), start: defaultStart(S.date) }); },
-  task(el) { const t = findTask(el.dataset.id); if (t) openTask(t); },
+  add() { if (S.view === 'due') subDialog(null); else taskForm(null, { date: ymd(S.date), start: defaultStart(S.date) }); },
+  // a single click opens the task after a short wait, so a double-click can mark it done instead
+  task(el) { clearTimeout(clickTimer); clickTimer = setTimeout(() => { const t = findTask(el.dataset.id); if (t) openTask(t); }, 260); },
+  group(el) { clearTimeout(clickTimer); clickTimer = setTimeout(() => groupDialog(el.dataset.ids.split(',')), 260); },
+  subedit(el) { const x = S.subs.find((q) => q.id === el.dataset.id); if (x) subDialog(x); },
+  async subdone(el, e) {
+    e.stopPropagation();
+    const x = S.subs.find((q) => q.id === el.dataset.id); if (!x) return;
+    try { await api().saveSub({ ...x, done: el.checked }); } catch (err) { if (err.message !== 'auth') toast(err.message); }
+    await load(); refreshToday();
+  },
   col(el, e) {
     const r = el.getBoundingClientRect();
     const min = Math.max(0, Math.min(23 * 60 + 45, Math.floor(((e.clientY - r.top) / HP * 60) / 15) * 15));
@@ -454,7 +560,7 @@ const actions = {
   menu() { menuDialog(); },
   signin() { signIn(); },
   gcal() { calendarDialog(); },
-  focus() { focusDialog(); },
+  study() { studyDialog(); },
   demo() { S.mode = 'demo'; lsSet('mode', 'demo'); load(); },
   saveclient() { const v = ($('#cid') || {}).value || ''; if (!v.trim()) { toast('Paste your client ID first.'); return; } saveClientId(v); },
 };
@@ -464,6 +570,19 @@ function saveClientId(v) {
 $('#app').addEventListener('click', (e) => {
   const el = e.target.closest('[data-a]');
   if (el && actions[el.dataset.a]) actions[el.dataset.a](el, e);
+});
+// double-click (or double-tap) a task: mark it done / not done
+async function toggleMany(list) {
+  const allDone = list.every((t) => t.done);
+  try { for (const t of list) if (t.done === allDone) await api().setDone(t, !allDone); } catch (err) { if (err.message !== 'auth') toast(err.message); }
+  await load(); refreshToday();
+}
+$('#app').addEventListener('dblclick', (e) => {
+  const el = e.target.closest('[data-a="task"],[data-a="group"]');
+  if (!el) return;
+  clearTimeout(clickTimer);
+  const list = el.dataset.a === 'group' ? el.dataset.ids.split(',').map(findTask).filter(Boolean) : [findTask(el.dataset.id)].filter(Boolean);
+  if (list.length) toggleMany(list);
 });
 document.addEventListener('keydown', (e) => {
   if ($('#dlg').open || /INPUT|SELECT|TEXTAREA/.test((e.target || {}).tagName || '')) return;
@@ -488,6 +607,7 @@ function taskForm(m, preset) {
   const heading = isNew ? 'New task' : m.kind === 'series' ? 'Repeating task' : 'Edit task';
   const html = `<h2>${heading}</h2>
     <label>Title<input id="f-title" value="${esc(m.title)}" placeholder="What are you doing?" autocomplete="off"></label>
+    <label>Take with me (optional)<input id="f-carry" value="${esc(m.carry || '')}" placeholder="e.g. charger, ID card" autocomplete="off"></label>
     <div class="grid2"><label>${m.kind === 'series' ? 'Starts on' : 'Date'}<input type="date" id="f-date" value="${esc(m.date)}"></label><label>Start<input type="time" id="f-start" value="${fromMin(m.start)}"></label></div>
     <div class="grid2"><label>Duration (minutes)<input type="number" id="f-dur" min="5" step="5" value="${m.dur}"></label>
       <label>Quick pick<select id="f-pick"><option value="">…</option>${[15, 30, 45, 60, 90, 120].map((x) => `<option value="${x}">${fmtDur(x)}</option>`).join('')}</select></label></div>
@@ -539,7 +659,7 @@ function taskForm(m, preset) {
       let eff = mask; if (rule === 2 && !eff) eff = 1 << wdIdx(parseYmd(date));
       const endDate = q('#f-end') && q('#f-end').value ? q('#f-end').value : null;
       if (endDate && endDate < date) { toast('The end date is before the start date.'); return; }
-      const base = { title, start, dur: Math.min(dur, 1440 - start), color };
+      const base = { title, start, dur: Math.min(dur, 1440 - start), color, carry: cleanCarry(q('#f-carry').value), rawDesc: m.rawDesc || '' };
       run(async () => {
         if (m.kind === 'task') await api().saveTask({ ...base, id: m.id, date, done });
         else if (m.kind === 'series') {
@@ -571,14 +691,14 @@ function menuDialog() {
     <button class="row" data-m="series">Repeating tasks<small>See and edit every repeating task</small></button>
     <button class="row" data-m="theme">Background colour<small>${THEMES.find((t) => t[0] === S.theme)[1]}</small></button>
     <button class="row" data-m="gcal">Google Calendar<small>${S.mode === 'google' ? 'Signed in' + (S.calName ? ' · ' + esc(S.calName) : '') : 'Demo mode (not syncing)'}</small></button>
-    <button class="row" data-m="focus">Focus timer<small>Simple countdown with a notification</small></button>
+    <button class="row" data-m="study">Study stopwatch<small>${SW.start ? 'Running: reminders are paused' : 'Pauses reminders while you study'}</small></button>
     <button class="row" data-m="remind">Reminders in this tab<small>${Rem.on ? 'On: notifies 5 minutes before a task' : 'Off'}</small></button>
     <button class="row" data-m="settings">Settings<small>Google client ID</small></button></div>
     <div class="actions"><button class="btn" id="b-close">Close</button></div>`, (d) => {
     d.querySelector('#b-close').onclick = closeDlg;
     d.querySelector('.list').onclick = (e) => {
       const b = e.target.closest('[data-m]'); if (!b) return;
-      ({ series: seriesListDialog, theme: themeDialog, gcal: calendarDialog, focus: focusDialog, remind: toggleReminders, settings: settingsDialog })[b.dataset.m]();
+      ({ series: seriesListDialog, theme: themeDialog, gcal: calendarDialog, study: studyDialog, remind: toggleReminders, settings: settingsDialog })[b.dataset.m]();
     };
   });
 }
@@ -636,36 +756,80 @@ function settingsDialog() {
   });
 }
 
-/* ---------- focus timer & reminders ---------- */
-const F = { end: null, timer: null, mins: lsGet('focusMins', 25) };
-const fmtClock = (ms) => { const s = Math.max(0, Math.round(ms / 1000)); return `${pad(Math.floor(s / 60))}:${pad(s % 60)}`; };
+/* ---------- study stopwatch, group dialog, submissions dialog ---------- */
+const SW = { start: lsGet('studyStart', 0), sessions: lsGet('sessions', []), timer: null };
+const fmtHMS = (ms) => { const s = Math.max(0, Math.floor(ms / 1000)); return `${Math.floor(s / 3600)}:${pad(Math.floor(s / 60) % 60)}:${pad(s % 60)}`; };
 function notify(title, body) {
+  if (SW.start) return; // the study stopwatch pauses reminders
   toast(`${title}: ${body}`);
   try { if ('Notification' in window && Notification.permission === 'granted') new Notification(title, { body, icon: 'icon-192.png' }); } catch { /* ignore */ }
 }
-function focusDialog() {
-  const running = !!F.end;
-  showDlg(`<h2>Focus timer</h2><div class="bigtime" id="f-clock">${running ? fmtClock(F.end - Date.now()) : fmtClock(F.mins * 60000)}</div>
-    ${running ? '' : `<label>Minutes<input type="number" id="f-min" min="1" max="180" value="${F.mins}"></label>`}
-    <div class="actions"><button class="btn" id="b-close">Close</button>${running ? '<button class="btn danger" id="b-stop">Stop</button>' : '<button class="btn primary" id="b-start">Start</button>'}</div>`, (d) => {
+function studiedTodayMin() {
+  const t = ymd(todayD());
+  return SW.sessions.filter((x) => x.date === t).reduce((a, x) => a + x.min, 0) + (SW.start ? Math.floor((Date.now() - SW.start) / 60000) : 0);
+}
+function swTick() {
+  const c = $('#swchip'); if (c) c.textContent = '⏱ ' + fmtHMS(Date.now() - SW.start);
+  const d = $('#sw-clock'); if (d) d.textContent = fmtHMS(Date.now() - SW.start);
+}
+function swStart() {
+  if (SW.start) return;
+  SW.start = Date.now(); lsSet('studyStart', SW.start);
+  clearInterval(SW.timer); SW.timer = setInterval(swTick, 1000);
+}
+function swStop() {
+  if (!SW.start) return;
+  const min = Math.floor((Date.now() - SW.start) / 60000);
+  if (min >= 1) { SW.sessions.push({ date: ymd(todayD()), min }); SW.sessions = SW.sessions.slice(-300); lsSet('sessions', SW.sessions); }
+  SW.start = 0; lsDel('studyStart'); clearInterval(SW.timer); SW.timer = null;
+}
+function studyDialog() {
+  const running = !!SW.start;
+  const today = studiedTodayMin();
+  showDlg(`<h2>Study stopwatch</h2><div class="bigtime" id="sw-clock">${fmtHMS(running ? Date.now() - SW.start : 0)}</div>
+    <div class="note">${running ? 'TimeBlock reminders in this tab are paused until you stop.' : 'While it runs, TimeBlock reminders in this tab are paused.'} Silencing your whole phone is done by the Android app (Study tab, Do Not Disturb).</div>
+    <div class="note">Studied today on this device: ${fmtDur(today)}</div>
+    <div class="actions"><button class="btn" id="b-close">Close</button>${running ? '<button class="btn danger" id="b-stop">Stop</button>' : '<button class="btn primary" id="b-start">Start studying</button>'}</div>`, (d) => {
     d.querySelector('#b-close').onclick = closeDlg;
-    const tick = setInterval(() => { const c = d.querySelector('#f-clock'); if (!c || !d.open) { clearInterval(tick); return; } if (F.end) c.textContent = fmtClock(F.end - Date.now()); }, 500);
-    if (d.querySelector('#b-start')) d.querySelector('#b-start').onclick = () => {
-      F.mins = Math.min(180, Math.max(1, Number(d.querySelector('#f-min').value) || 25)); lsSet('focusMins', F.mins);
-      F.end = Date.now() + F.mins * 60000;
-      if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission();
-      clearInterval(F.timer);
-      F.timer = setInterval(() => {
-        if (!F.end) return;
-        if (Date.now() >= F.end) { F.end = null; clearInterval(F.timer); notify('Focus session finished', 'Time for a break.'); render(); return; }
-        const c = $('#focuschip'); if (c) c.textContent = fmtClock(F.end - Date.now());
-      }, 1000);
-      closeDlg(); render();
-    };
-    if (d.querySelector('#b-stop')) d.querySelector('#b-stop').onclick = () => { F.end = null; clearInterval(F.timer); closeDlg(); render(); };
+    if (d.querySelector('#b-start')) d.querySelector('#b-start').onclick = () => { swStart(); closeDlg(); render(); };
+    if (d.querySelector('#b-stop')) d.querySelector('#b-stop').onclick = () => { swStop(); closeDlg(); render(); };
   });
 }
-const Rem = { on: lsGet('remind', false), fired: new Set(), list: [] };
+function groupDialog(ids) {
+  const ts = ids.map(findTask).filter(Boolean).sort((a, b) => a.start - b.start);
+  if (!ts.length) return;
+  const allDone = ts.every((t) => t.done);
+  showDlg(`<h2>${esc(ts[0].title)}</h2><div class="note">${ts.length} tasks on ${fmtDayLong(parseYmd(ts[0].date))}. Click one to edit it.</div>
+    <div class="list">${ts.map((t, i) => `<button class="row" data-i="${i}">${fmtTime(t.start)} – ${fmtTime(t.start + t.dur)}${t.done ? ' · done' : ''}</button>`).join('')}</div>
+    <div class="actions"><button class="btn" id="b-close">Close</button><button class="btn primary" id="b-all">${allDone ? 'Mark all not done' : 'Mark all done'}</button></div>`, (d) => {
+    d.querySelector('#b-close').onclick = closeDlg;
+    d.querySelector('#b-all').onclick = () => { closeDlg(); toggleMany(ts); };
+    d.querySelector('.list').onclick = (e) => { const b = e.target.closest('[data-i]'); if (b) { closeDlg(); openTask(ts[Number(b.dataset.i)]); } };
+  });
+}
+function subDialog(sub) {
+  const m = sub || { title: '', date: ymd(addDays(todayD(), 1)), time: -1, note: '', done: false };
+  showDlg(`<h2>${sub ? 'Edit submission' : 'New submission'}</h2>
+    <label>What is due?<input id="u-title" value="${esc(m.title)}" autocomplete="off"></label>
+    <div class="grid2"><label>Due date<input type="date" id="u-date" value="${esc(m.date)}"></label><label>Time (optional)<input type="time" id="u-time" value="${m.time >= 0 ? fromMin(m.time) : ''}"></label></div>
+    <label>Note (optional)<input id="u-note" value="${esc(m.note || '')}" autocomplete="off"></label>
+    <div class="actions">${sub ? '<button class="btn danger" id="b-del">Delete</button>' : ''}<span class="sp"></span><button class="btn" id="b-cancel">Cancel</button><button class="btn primary" id="b-save">Save</button></div>`, (d) => {
+    const q = (x) => d.querySelector(x);
+    setTimeout(() => q('#u-title').focus(), 30);
+    q('#b-cancel').onclick = closeDlg;
+    const run = async (fn) => { try { await fn(); closeDlg(); await load(); refreshToday(); } catch (e) { if (e.message !== 'auth') toast(e.message); } };
+    let armed = false;
+    if (q('#b-del')) q('#b-del').onclick = () => { if (armed) run(() => api().deleteSub(m.id)); else { armed = true; q('#b-del').textContent = 'Tap again to delete'; } };
+    q('#b-save').onclick = () => {
+      const title = q('#u-title').value.trim(), date = q('#u-date').value, t = q('#u-time').value;
+      if (!title) { toast('Say what is due.'); return; }
+      if (!date) { toast('Pick a due date.'); return; }
+      run(() => api().saveSub({ ...m, title, date, time: t ? toMin(t) : -1, note: q('#u-note').value.trim() }));
+    };
+    q('#u-title').onkeydown = (e) => { if (e.key === 'Enter') q('#b-save').click(); };
+  });
+}
+const Rem = { on: lsGet('remind', false), fired: new Set(), list: [], subs: [] };
 function toggleReminders() {
   Rem.on = !Rem.on; lsSet('remind', Rem.on);
   if (Rem.on && 'Notification' in window && Notification.permission === 'default') Notification.requestPermission();
@@ -674,21 +838,30 @@ function toggleReminders() {
 }
 async function refreshToday() {
   if (!Rem.on || !S.mode || (S.mode === 'google' && (!validToken() || !S.calId))) return;
-  try { Rem.list = await api().range(todayD(), todayD()); } catch { /* ignore */ }
+  try { Rem.list = await api().range(todayD(), todayD()); Rem.subs = await api().subs(); } catch { /* ignore */ }
 }
 function checkReminders() {
-  if (!Rem.on) return;
+  if (!Rem.on || SW.start) return; // reminders are paused while the study stopwatch runs
   const n = new Date(), nm = n.getHours() * 60 + n.getMinutes() + n.getSeconds() / 60;
   Rem.list.forEach((t) => {
     const diff = t.start - nm, key = `${t.id}@${t.date}@${t.start}`;
     if (!t.done && diff > 0 && diff <= 5 && !Rem.fired.has(key)) {
-      Rem.fired.add(key); notify(t.title, `starts at ${fmtTime(t.start)} (in ${Math.max(1, Math.round(diff))} min)`);
+      Rem.fired.add(key);
+      notify(t.title, `starts at ${fmtTime(t.start)} (in ${Math.max(1, Math.round(diff))} min)${t.carry ? ' · Take: ' + t.carry : ''}`);
     }
+  });
+  const today = ymd(n), tomorrow = ymd(addDays(todayD(), 1));
+  Rem.subs.forEach((s) => {
+    if (s.done) return;
+    const k1 = `sub1:${s.id}:${s.date}`, k0 = `sub0:${s.id}:${s.date}`;
+    if (s.date === tomorrow && nm >= 540 && !Rem.fired.has(k1)) { Rem.fired.add(k1); notify('Due tomorrow: ' + s.title, 'Submission is due tomorrow' + (s.time >= 0 ? ' at ' + fmtTime(s.time) : '') + '.'); }
+    if (s.date === today && nm >= (s.time >= 0 ? Math.max(0, s.time - 120) : 480) && !Rem.fired.has(k0)) { Rem.fired.add(k0); notify('Due today: ' + s.title, 'Submission is due today' + (s.time >= 0 ? ' at ' + fmtTime(s.time) : '') + '.'); }
   });
 }
 
 /* ---------- boot ---------- */
 async function boot() {
+  if (SW.start) SW.timer = setInterval(swTick, 1000);
   render();
   if (S.mode === 'google') {
     if (validToken()) { try { await ensureCalendar(); } catch (e) { if (e.message !== 'auth') S.error = e.message; } } else S.needAuth = true;

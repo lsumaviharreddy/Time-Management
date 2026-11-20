@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.DateRange
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Icon
@@ -64,6 +65,7 @@ class MainActivity : ComponentActivity() {
             calendarLauncher.launch(arrayOf(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR))
         }
         state.onRequestUsage = { startActivity(Usage.usageAccessIntent()) }
+        state.onRequestDnd = { startActivity(Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS)) }
         state.onRequestOverlay = {
             startActivity(
                 Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))
@@ -150,15 +152,20 @@ fun AppRoot(state: PlannerState) {
                 NavigationBarItem(
                     selected = tab == 1, onClick = { tab = 1 },
                     icon = { Icon(Icons.Default.PlayArrow, contentDescription = null) },
-                    label = { Text("Focus") },
+                    label = { Text("Study") },
                 )
                 NavigationBarItem(
                     selected = tab == 2, onClick = { tab = 2 },
+                    icon = { Icon(Icons.Default.Notifications, contentDescription = null) },
+                    label = { Text("Due") },
+                )
+                NavigationBarItem(
+                    selected = tab == 3, onClick = { tab = 3 },
                     icon = { Icon(Icons.Default.Lock, contentDescription = null) },
                     label = { Text("Apps") },
                 )
                 NavigationBarItem(
-                    selected = tab == 3, onClick = { tab = 3 },
+                    selected = tab == 4, onClick = { tab = 4 },
                     icon = { Icon(Icons.Default.CheckCircle, contentDescription = null) },
                     label = { Text("Review") },
                 )
@@ -168,8 +175,9 @@ fun AppRoot(state: PlannerState) {
         Box(Modifier.padding(padding)) {
             when (tab) {
                 0 -> PlanScreen(state)
-                1 -> FocusScreen(state)
-                2 -> AppsScreen(state)
+                1 -> StudyScreen(state)
+                2 -> DueScreen(state)
+                3 -> AppsScreen(state)
                 else -> ReviewScreen(state)
             }
         }

@@ -120,6 +120,7 @@ class LimitService : Service() {
 
     // ---- notifications ----
     private fun notifyHeadsUp(app: MonitoredApp, limitMin: Int) {
+        if (Store(this).studying) return // stopwatch is running: no notifications
         val n = Notification.Builder(this, Reminders.CH_LIMITS)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle("${app.name}: ${Reminders.LEAD_MIN} minutes left")
@@ -130,6 +131,7 @@ class LimitService : Service() {
     }
 
     private fun notifyLimitReached(app: MonitoredApp, limitMin: Int) {
+        if (Store(this).studying) return
         val now = System.currentTimeMillis()
         if (now - (lastLimitNotice[app.key] ?: 0L) < 60_000L) return
         lastLimitNotice[app.key] = now

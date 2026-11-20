@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
@@ -46,13 +47,16 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
@@ -77,6 +81,7 @@ fun PlanScreen(state: PlannerState) {
     var showSync by remember { mutableStateOf(false) }
     var showRepeats by remember { mutableStateOf(false) }
     var showTheme by remember { mutableStateOf(false) }
+    var picking by remember { mutableStateOf<List<Task>?>(null) }
 
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
@@ -102,6 +107,7 @@ fun PlanScreen(state: PlannerState) {
                 1 -> WeekView(
                     state,
                     onTaskClick = { editing = it },
+                    onGroupClick = { picking = it },
                     onAddAt = { d, minutes -> addAt = d to minutes },
                     modifier = Modifier.weight(1f),
                 )
@@ -124,6 +130,13 @@ fun PlanScreen(state: PlannerState) {
     }
 
     if (showSync) SyncDialog(state) { showSync = false }
+    picking?.let { list ->
+        GroupDialog(
+            state, list,
+            onEdit = { t -> picking = null; editing = t },
+            onDismiss = { picking = null },
+        )
+    }
     if (showTheme) ThemeDialog(state) { showTheme = false }
     if (showRepeats) {
         RepeatListDialog(
@@ -376,13 +389,31 @@ internal fun layoutLanes(tasks: List<Task>): List<Placed> {
 
 /** One coloured task block. [compact] shows only the title in small type (week view). */
 @Composable
-internal fun TaskBlock(t: Task, modifier: Modifier, compact: Boolean, onClick: () -> Unit) {
+internal fun TaskBlock(
+    t: Task,
+    modifier: Modifier,
+    compact: Boolean,
+    onClick: () -> Unit,
+    onDoubleTap: () -> Unit = {},
+) {
     val color = TaskColors[t.colorIndex.coerceIn(0, TaskColors.lastIndex)]
+    val haptic = LocalHapticFeedback.current
+    val click by rememberUpdatedState(onClick)
+    val double by rememberUpdatedState(onDoubleTap)
     Box(
         modifier
             .clip(RoundedCornerShape(if (compact) 4.dp else 8.dp))
             .background(color.copy(alpha = if (t.done) 0.4f else 0.92f))
-            .clickable { onClick() }
+            .pointerInput(Unit) {
+                // tap opens the task, double-tap marks it done (or not done)
+                detectTapGestures(
+                    onDoubleTap = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        double()
+                    },
+                    onTap = { click() },
+                )
+            }
             .padding(horizontal = if (compact) 2.dp else 8.dp, vertical = if (compact) 1.dp else 4.dp)
     ) {
         Column {
@@ -413,6 +444,15 @@ internal fun TaskBlock(t: Task, modifier: Modifier, compact: Boolean, onClick: (
                     color = Color.White.copy(alpha = 0.9f),
                     fontSize = 11.sp,
                     maxLines = 1,
+                )
+            }
+            if (!compact && t.carry.isNotBlank() && t.durationMin >= 45) {
+                Text(
+                    "Take: ${cleanCarry(t.carry)}",
+                    color = Color.White.copy(alpha = 0.9f),
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
         }
@@ -490,6 +530,7 @@ private fun Timeline(
                                 .height(blockH - 2.dp),
                             compact = false,
                             onClick = { onTaskClick(t) },
+                            onDoubleTap = { state.toggleDone(t) },
                         )
                     }
                 }
@@ -512,4 +553,60 @@ private fun Timeline(
             }
         }
     }
+}
+
+/** Tasks with the same title on one day, shown as a single block in the week view. */
+internal class TaskGroup(val tasks: List<Task>) {
+    /** One stand-in task covering the whole group, used only for drawing. */
+    val merged: Task = if (tasks.size == 1) {
+        tasks[0]
+    } else {
+        val start = tasks.minOf { it.startMin }
+        val end = tasks.maxOf { it.endMin }.coerceAtMost(1440)
+        tasks[0].copy(
+            title = "${tasks[0].title} ×${tasks.size}",
+            startMin = start,
+            durationMin = end - start,
+            done = tasks.all { it.done },
+        )
+    }
+}
+
+internal fun groupSimilar(tasks: List<Task>): List<TaskGroup> =
+    tasks.groupBy { it.title.trim().lowercase() }.values
+        .map { TaskGroup(it.sortedBy { t -> t.startMin }) }
+        .sortedBy { it.merged.startMin }
+
+@Composable
+private fun GroupDialog(state: PlannerState, tasks: List<Task>, onEdit: (Task) -> Unit, onDismiss: () -> Unit) {
+    val live = tasks.map { t -> state.tasksOn(t.date).firstOrNull { it.id == t.id } ?: t }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(tasks.first().title) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    "${tasks.size} tasks on ${fmtDay(tasks.first().date)}. Tap one to edit it.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                live.forEach { t ->
+                    TextButton(onClick = { onEdit(t) }, modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            "${fmtTime(t.startMin)} – ${fmtTime(t.endMin % 1440)}" + if (t.done) "  ✓ done" else "",
+                            Modifier.weight(1f),
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                val allDone = live.all { it.done }
+                live.forEach { if (it.done == allDone) state.toggleDone(it) }
+                onDismiss()
+            }) { Text(if (live.all { it.done }) "Mark all not done" else "Mark all done") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+    )
 }

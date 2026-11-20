@@ -33,6 +33,7 @@ data class Series(
     val doneDates: Set<LocalDate> = emptySet(),
     val skippedDates: Set<LocalDate> = emptySet(),
     val eventId: Long = -1L, // recurring Google Calendar event id, -1 if not synced
+    val carry: String = "",
 ) {
     fun occursOn(d: LocalDate): Boolean {
         if (d < startDate) return false
@@ -64,6 +65,7 @@ data class Series(
         done = d in doneDates,
         colorIndex = colorIndex,
         seriesId = id,
+        carry = carry,
     )
 
     fun summary(): String = when (rule) {

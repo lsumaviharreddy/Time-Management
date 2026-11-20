@@ -76,16 +76,18 @@ class PlannerState(private val ctx: Context) {
         Monitor.sync(ctx)
     }
 
-    // Focus timer
-    var focusEnd by mutableLongStateOf(store.focusEnd)
+    // Study stopwatch
+    var studyStart by mutableLongStateOf(store.studyStart)
         private set
-    var focusTotalMin by mutableIntStateOf(store.focusTotal)
+    val studying: Boolean get() = studyStart > 0L
+    var studyDnd by mutableStateOf(store.studyDnd)
         private set
-    var isBreak by mutableStateOf(store.focusBreak)
-    var focusTaskId by mutableIntStateOf(store.focusTask)
-    var workMin by mutableIntStateOf(25)
-    var breakMin by mutableIntStateOf(5)
-    val running: Boolean get() = focusEnd > 0L
+    var hasDndAccess by mutableStateOf(false)
+        private set
+    var onRequestDnd: () -> Unit = {}
+
+    // Submissions
+    val submissions = mutableStateListOf<Submission>().apply { addAll(store.loadSubmissions()) }
 
     // ---- tasks ----
     /** Normal tasks plus occurrences of repeating tasks on [date], in time order. */
@@ -123,7 +125,7 @@ class PlannerState(private val ctx: Context) {
 
     /** The parts of a series the calendar knows about (colour and done ticks stay in the app). */
     private fun Series.calendarKey() =
-        listOf(title, startDate, startMin, durationMin, rule, weekdayMask, endDate, skippedDates)
+        listOf(title, startDate, startMin, durationMin, rule, weekdayMask, endDate, skippedDates, carry)
 
     fun upsertSeries(s: Series) {
         var saved = s
@@ -213,6 +215,46 @@ class PlannerState(private val ctx: Context) {
         tasks.firstOrNull { it.id == id }?.title
             ?: tasksOn(LocalDate.now()).firstOrNull { it.id == id }?.title
 
+    // ---- submissions ----
+    private fun reloadSubmissions(list: List<Submission>) {
+        if (submissions.toList() != list) {
+            submissions.clear()
+            submissions.addAll(list)
+        }
+    }
+
+    private fun mutateSubmissions(block: (MutableList<Submission>) -> Unit) {
+        synchronized(CalendarSync.LOCK) {
+            val list = store.loadSubmissions().toMutableList()
+            block(list)
+            store.saveSubmissions(list)
+            reloadSubmissions(list)
+        }
+    }
+
+    fun upsertSubmission(sub: Submission) {
+        var saved = sub
+        mutateSubmissions { list ->
+            val i = list.indexOfFirst { it.id == sub.id }
+            var x = if (sub.eventId <= 0 && i >= 0) sub.copy(eventId = list[i].eventId) else sub
+            if (syncOn) x = CalendarSync.pushSubmission(ctx, store.calendarId, x)
+            saved = x
+            if (i >= 0) list[i] = x else list.add(x)
+        }
+        Reminders.scheduleSubmission(ctx, saved)
+    }
+
+    fun deleteSubmission(id: Int) {
+        mutateSubmissions { list ->
+            val sub = list.firstOrNull { it.id == id }
+            if (sub != null && sub.eventId > 0 && syncOn) CalendarSync.deleteEvent(ctx, sub.eventId)
+            list.removeAll { it.id == id }
+        }
+        Reminders.cancelSubmission(ctx, id)
+    }
+
+    fun toggleSubmission(sub: Submission) = upsertSubmission(sub.copy(done = !sub.done))
+
     // ---- calendar sync ----
     suspend fun syncNow() {
         if (store.calendarId <= 0 || !CalendarSync.hasPermission(ctx)) return
@@ -227,6 +269,7 @@ class PlannerState(private val ctx: Context) {
             synchronized(CalendarSync.LOCK) {
                 reloadFrom(store.loadTasks())
                 reloadSeries(store.loadSeries())
+                reloadSubmissions(store.loadSubmissions())
             }
         }
         lastSync = System.currentTimeMillis()
@@ -242,6 +285,9 @@ class PlannerState(private val ctx: Context) {
                 val detachedSeries = store.loadSeries().map { it.copy(eventId = -1L) }
                 store.saveSeries(detachedSeries)
                 reloadSeries(detachedSeries)
+                val detachedSubs = store.loadSubmissions().map { it.copy(eventId = -1L) }
+                store.saveSubmissions(detachedSubs)
+                reloadSubmissions(detachedSubs)
             }
             store.calendarId = id
         }
@@ -253,50 +299,43 @@ class PlannerState(private val ctx: Context) {
         selectCalendar(-1L)
     }
 
-    // ---- focus ----
-    private fun saveFocus() {
-        store.focusEnd = focusEnd
-        store.focusTotal = focusTotalMin
-        store.focusBreak = isBreak
-        store.focusTask = focusTaskId
+    // ---- study stopwatch ----
+    private val nm get() = ctx.getSystemService(NotificationManager::class.java)
+
+    fun setStudyDnd(on: Boolean) {
+        studyDnd = on
+        store.studyDnd = on
     }
 
-    private fun addSession(minutes: Int) {
-        if (minutes < 1) return
-        sessions.add(FocusSession(LocalDate.now(), minutes, focusTaskId))
-        store.saveSessions(sessions.toList())
-    }
-
-    fun startFocus() {
-        val minutes = if (isBreak) breakMin else workMin
-        focusTotalMin = minutes
-        focusEnd = System.currentTimeMillis() + minutes * 60_000L
-        saveFocus()
-        Reminders.scheduleFocusEnd(ctx, focusEnd, isBreak)
-    }
-
-    fun stopFocus() {
-        if (!running) return
-        if (!isBreak) {
-            val startedAt = focusEnd - focusTotalMin * 60_000L
-            addSession(((System.currentTimeMillis() - startedAt) / 60_000L).toInt())
+    fun startStudy() {
+        if (studying) return
+        studyStart = System.currentTimeMillis()
+        store.studyStart = studyStart
+        if (studyDnd && nm.isNotificationPolicyAccessGranted) {
+            store.dndRestore = nm.currentInterruptionFilter
+            nm.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_ALARMS) // silences everything except alarms
         }
-        focusEnd = 0L
-        saveFocus()
-        Reminders.cancelFocusEnd(ctx)
     }
 
-    private fun finishFocus() {
-        if (!isBreak) addSession(focusTotalMin)
-        isBreak = !isBreak // suggest a break after work, work after a break
-        focusEnd = 0L
-        saveFocus()
+    fun stopStudy() {
+        if (!studying) return
+        val minutes = ((System.currentTimeMillis() - studyStart) / 60_000L).toInt()
+        if (minutes >= 1) {
+            sessions.add(FocusSession(LocalDate.now(), minutes, -1))
+            store.saveSessions(sessions.toList())
+        }
+        studyStart = 0L
+        store.studyStart = 0L
+        val restore = store.dndRestore
+        if (restore != -1 && nm.isNotificationPolicyAccessGranted) {
+            nm.setInterruptionFilter(if (restore <= 0) NotificationManager.INTERRUPTION_FILTER_ALL else restore)
+        }
+        store.dndRestore = -1
     }
 
     /** Called once a second from the UI. */
     fun tick() {
         now = System.currentTimeMillis()
-        if (focusEnd > 0L && now >= focusEnd) finishFocus()
     }
 
     fun refreshPermissions() {
@@ -307,5 +346,6 @@ class PlannerState(private val ctx: Context) {
         hasUsageAccess = Usage.hasAccess(ctx)
         canOverlay = Usage.canOverlay(ctx)
         hasCalendarPermission = CalendarSync.hasPermission(ctx)
+        hasDndAccess = nm.isNotificationPolicyAccessGranted
     }
 }

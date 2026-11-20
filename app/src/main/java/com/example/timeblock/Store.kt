@@ -23,6 +23,7 @@ class Store(context: Context) {
                 done = o.optBoolean("done", false),
                 colorIndex = o.optInt("color", 0),
                 eventId = o.optLong("ev", -1L),
+                carry = o.optString("carry", ""),
             )
         }
     }
@@ -40,6 +41,7 @@ class Store(context: Context) {
                     .put("done", t.done)
                     .put("color", t.colorIndex)
                     .put("ev", t.eventId)
+                    .put("carry", t.carry)
             )
         }
         prefs.edit().putString("tasks", arr.toString()).apply()
@@ -87,6 +89,7 @@ class Store(context: Context) {
                 doneDates = dates("done"),
                 skippedDates = dates("skip"),
                 eventId = o.optLong("ev", -1L),
+                carry = o.optString("carry", ""),
             )
         }
     }
@@ -106,6 +109,7 @@ class Store(context: Context) {
                 .put("done", JSONArray(s.doneDates.map { it.toString() }))
                 .put("skip", JSONArray(s.skippedDates.map { it.toString() }))
                 .put("ev", s.eventId)
+                .put("carry", s.carry)
             if (s.endDate != null) o.put("end", s.endDate.toString())
             arr.put(o)
         }
@@ -157,22 +161,55 @@ class Store(context: Context) {
         prefs.edit().putString("warned", "$date|${keys.joinToString(",")}").apply()
     }
 
-    // Running focus/break timer
-    var focusEnd: Long
-        get() = prefs.getLong("focusEnd", 0L)
-        set(v) { prefs.edit().putLong("focusEnd", v).apply() }
+    // Study stopwatch: start time in millis (0 = not running)
+    var studyStart: Long
+        get() = prefs.getLong("studyStart", 0L)
+        set(v) { prefs.edit().putLong("studyStart", v).apply() }
 
-    var focusTotal: Int
-        get() = prefs.getInt("focusTotal", 25)
-        set(v) { prefs.edit().putInt("focusTotal", v).apply() }
+    val studying: Boolean get() = studyStart > 0L
 
-    var focusBreak: Boolean
-        get() = prefs.getBoolean("focusBreak", false)
-        set(v) { prefs.edit().putBoolean("focusBreak", v).apply() }
+    // Do Not Disturb: the interruption filter to restore when the stopwatch stops (-1 = we did not change it)
+    var dndRestore: Int
+        get() = prefs.getInt("dndRestore", -1)
+        set(v) { prefs.edit().putInt("dndRestore", v).apply() }
 
-    var focusTask: Int
-        get() = prefs.getInt("focusTask", -1)
-        set(v) { prefs.edit().putInt("focusTask", v).apply() }
+    // Turn on Do Not Disturb while studying (needs Do Not Disturb access)
+    var studyDnd: Boolean
+        get() = prefs.getBoolean("studyDnd", true)
+        set(v) { prefs.edit().putBoolean("studyDnd", v).apply() }
+
+    fun loadSubmissions(): List<Submission> {
+        val arr = JSONArray(prefs.getString("submissions", "[]"))
+        return (0 until arr.length()).map { i ->
+            val o = arr.getJSONObject(i)
+            Submission(
+                id = o.getInt("id"),
+                title = o.getString("title"),
+                date = LocalDate.parse(o.getString("date")),
+                timeMin = o.optInt("time", -1),
+                note = o.optString("note", ""),
+                done = o.optBoolean("done", false),
+                eventId = o.optLong("ev", -1L),
+            )
+        }
+    }
+
+    fun saveSubmissions(list: List<Submission>) {
+        val arr = JSONArray()
+        list.forEach { s ->
+            arr.put(
+                JSONObject()
+                    .put("id", s.id)
+                    .put("title", s.title)
+                    .put("date", s.date.toString())
+                    .put("time", s.timeMin)
+                    .put("note", s.note)
+                    .put("done", s.done)
+                    .put("ev", s.eventId)
+            )
+        }
+        prefs.edit().putString("submissions", arr.toString()).apply()
+    }
 
     var notifAsked: Boolean
         get() = prefs.getBoolean("notifAsked", false)

@@ -54,6 +54,7 @@ import java.util.Locale
 fun WeekView(
     state: PlannerState,
     onTaskClick: (Task) -> Unit,
+    onGroupClick: (List<Task>) -> Unit,
     onAddAt: (LocalDate, Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -171,8 +172,12 @@ fun WeekView(
                                         .background(lineColor)
                                 )
                             }
-                            layoutLanes(weekTasks[i]).forEach { p ->
+                            // tasks with the same title on one day are merged into a single block
+                            val groups = groupSimilar(weekTasks[i])
+                            val byId = groups.associateBy { it.merged.id }
+                            layoutLanes(groups.map { it.merged }).forEach { p ->
                                 val t = p.task
+                                val g = byId[t.id] ?: return@forEach
                                 val laneW = colW / p.lanes
                                 val blockH = (hourH * (t.durationMin / 60f)).coerceAtLeast(18.dp)
                                 TaskBlock(
@@ -182,7 +187,11 @@ fun WeekView(
                                         .width(laneW - 1.dp)
                                         .height(blockH - 1.dp),
                                     compact = true,
-                                    onClick = { onTaskClick(t) },
+                                    onClick = { if (g.tasks.size == 1) onTaskClick(g.tasks[0]) else onGroupClick(g.tasks) },
+                                    onDoubleTap = {
+                                        val allDone = g.tasks.all { it.done }
+                                        g.tasks.forEach { if (it.done == allDone) state.toggleDone(it) }
+                                    },
                                 )
                             }
                         }
@@ -266,7 +275,12 @@ fun MonthView(
                 Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(8.dp))
-                    .clickable { onTaskClick(t) }
+                    .pointerInput(t.id, t.done) {
+                        detectTapGestures(
+                            onDoubleTap = { state.toggleDone(t) },
+                            onTap = { onTaskClick(t) },
+                        )
+                    }
                     .padding(vertical = 8.dp, horizontal = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -285,7 +299,8 @@ fun MonthView(
                         textDecoration = if (t.done) TextDecoration.LineThrough else null,
                     )
                     Text(
-                        "${fmtTime(t.startMin)} · ${fmtDuration(t.durationMin)}" + if (t.seriesId >= 0) " · repeats" else "",
+                        "${fmtTime(t.startMin)} · ${fmtDuration(t.durationMin)}" + (if (t.seriesId >= 0) " · repeats" else "") +
+                            (if (t.carry.isNotBlank()) " · take: ${cleanCarry(t.carry)}" else ""),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
