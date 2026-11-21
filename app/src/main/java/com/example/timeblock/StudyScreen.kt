@@ -89,7 +89,7 @@ fun StudyScreen(state: PlannerState) {
                     Switch(
                         checked = state.studyDnd,
                         enabled = !running,
-                        onCheckedChange = { state.setStudyDnd(it) },
+                        onCheckedChange = { state.changeStudyDnd(it) },
                     )
                 }
                 if (state.studyDnd && !state.hasDndAccess) {

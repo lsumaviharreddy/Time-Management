@@ -302,7 +302,7 @@ class PlannerState(private val ctx: Context) {
     // ---- study stopwatch ----
     private val nm get() = ctx.getSystemService(NotificationManager::class.java)
 
-    fun setStudyDnd(on: Boolean) {
+    fun changeStudyDnd(on: Boolean) {
         studyDnd = on
         store.studyDnd = on
     }
