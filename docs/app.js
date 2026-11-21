@@ -686,6 +686,14 @@ function findFreeSlot(existing, dur, from) {
 }
 
 /* ---------- menu & dialogs ---------- */
+let installEvt = null;
+window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt = e; });
+window.addEventListener('appinstalled', () => { installEvt = null; toast('TimeBlock installed'); });
+const isInstalled = () => window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+function installApp() {
+  if (installEvt) { const e = installEvt; installEvt = null; e.prompt(); closeDlg(); return; }
+  toast('In Chrome or Edge, use the install icon at the right end of the address bar (or menu ⋮ → Install TimeBlock).');
+}
 function menuDialog() {
   showDlg(`<h2>Menu</h2><div class="list">
     <button class="row" data-m="series">Repeating tasks<small>See and edit every repeating task</small></button>
@@ -693,12 +701,13 @@ function menuDialog() {
     <button class="row" data-m="gcal">Google Calendar<small>${S.mode === 'google' ? 'Signed in' + (S.calName ? ' · ' + esc(S.calName) : '') : 'Demo mode (not syncing)'}</small></button>
     <button class="row" data-m="study">Study stopwatch<small>${SW.start ? 'Running: reminders are paused' : 'Pauses reminders while you study'}</small></button>
     <button class="row" data-m="remind">Reminders in this tab<small>${Rem.on ? 'On: notifies 5 minutes before a task' : 'Off'}</small></button>
-    <button class="row" data-m="settings">Settings<small>Google client ID</small></button></div>
+    <button class="row" data-m="settings">Settings<small>Google client ID</small></button>
+    ${isInstalled() ? '' : '<button class="row" data-m="install">Install on this computer<small>Own window, desktop icon, works offline</small></button>'}</div>
     <div class="actions"><button class="btn" id="b-close">Close</button></div>`, (d) => {
     d.querySelector('#b-close').onclick = closeDlg;
     d.querySelector('.list').onclick = (e) => {
       const b = e.target.closest('[data-m]'); if (!b) return;
-      ({ series: seriesListDialog, theme: themeDialog, gcal: calendarDialog, study: studyDialog, remind: toggleReminders, settings: settingsDialog })[b.dataset.m]();
+      ({ series: seriesListDialog, theme: themeDialog, gcal: calendarDialog, study: studyDialog, remind: toggleReminders, settings: settingsDialog, install: installApp })[b.dataset.m]();
     };
   });
 }

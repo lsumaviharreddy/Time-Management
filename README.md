@@ -90,7 +90,7 @@ Pick the calendar named **TimeBlock** (create it in Google Calendar first, as fo
 - "Completed" adds a ✓ to the title, the same as the Android app.
 - Tap or click an empty spot on the timeline to add a task at that time.
 - ⋮ → Reminders in this tab gives a notification 5 minutes before a task while the page is open. For reminders when the page is closed, rely on the phone app or Google Calendar's own notifications.
-- Install as an app: in Chrome or Edge, use the install icon in the address bar.
+- Install as a desktop app: open the page in Chrome or Edge and choose menu ⋮ → "Install on this computer" (or the install icon in the address bar). It then opens in its own window with a desktop/Start menu icon and works offline.
 - To try it locally: `cd docs && python -m http.server 8000`, then open <http://localhost:8000>. **Demo mode** works without any Google setup.
 
 ## Take-with-me lists, double-tap and the week view
