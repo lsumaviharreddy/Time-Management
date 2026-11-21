@@ -177,7 +177,7 @@ fun WeekView(
                             val byId = groups.associateBy { it.merged.id }
                             layoutLanes(groups.map { it.merged }).forEach { p ->
                                 val t = p.task
-                                val g = byId[t.id] ?: return@forEach
+                                val g = byId.getValue(t.id)
                                 val laneW = colW / p.lanes
                                 val blockH = (hourH * (t.durationMin / 60f)).coerceAtLeast(18.dp)
                                 TaskBlock(
